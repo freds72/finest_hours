@@ -1,0 +1,14 @@
+log.txt
+config.txt
+activity_log.txt
+/backup/
+/bbs/
+/carts/demos
+/cdata
+*.blend1
+sdl_controllers.txt
+*.bin
+/carts/dat_*.p8
+/tools/__pycache__
+
+

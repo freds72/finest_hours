@@ -46,7 +46,7 @@ def pack_models(home_path):
     blob = ""
 
     # 3d models
-    file_list = ['mountain']
+    file_list = ['mountain','bf109']
     blob += pack_variant(len(file_list))
     for blend_file in file_list:
         logging.info("Exporting: {}.blend".format(blend_file))
@@ -58,6 +58,7 @@ def pack_models(home_path):
                 raise Exception('Unable to loadt: {}. Exception: {}'.format(blend_file,err))
             logging.debug("Blender exit code: {} \n out:{}\n err: {}\n".format(exitcode,out,err))
             with open(path, 'r') as outfile:
+                blob += pack_string(blend_file)
                 blob += outfile.read()
         finally:
             os.remove(path)

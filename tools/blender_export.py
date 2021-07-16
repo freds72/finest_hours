@@ -95,7 +95,22 @@ scene = bpy.context.scene
 # seriously???
 # import matplotlib.colors
 # matplotlib.colors.to_rgb('#B4FBB8')
-# (0.7058823529411765, 0.984313725490196, 0.7215686274509804)
+# ['0 = (0.0, 0.0, 0.0)'
+#  '1 = (0.11372549019607843, 0.16862745098039217, 0.3254901960784314)'
+#  '2 = (0.49411764705882355, 0.1450980392156863, 0.3254901960784314)'
+#  '3 = (0.0, 0.5294117647058824, 0.3176470588235294)'
+#  '4 = (0.6705882352941176, 0.3215686274509804, 0.21176470588235294)'
+#  '5 = (0.37254901960784315, 0.3411764705882353, 0.30980392156862746)'
+#  '6 = (0.7607843137254902, 0.7647058823529411, 0.7803921568627451)'
+#  '7 = (1.0, 0.9450980392156862, 0.9098039215686274)'
+#  '8 = (1.0, 0.0, 0.30196078431372547)'
+#  '9 = (1.0, 0.6392156862745098, 0.0)'
+#  '10 = (1.0, 0.9254901960784314, 0.15294117647058825)'
+#  '11 = (0.0, 0.8941176470588236, 0.21176470588235294)'
+#  '12 = (0.1607843137254902, 0.6784313725490196, 1.0)'
+#  '13 = (0.5137254901960784, 0.4627450980392157, 0.611764705882353)'
+#  '14 = (1.0, 0.4666666666666667, 0.6588235294117647)'
+#  '15 = (1.0, 0.8, 0.6666666666666666)']
 
 p8_colors = ['000000','1D2B53','7E2553','008751','AB5236','5F574F','C2C3C7','FFF1E8','FF004D','FFA300','FFEC27','00E436','29ADFF','83769C','FF77A8','FFCCAA']
 def diffuse_to_p8color(rgb):
@@ -151,9 +166,16 @@ def export_layer(layer):
     # faces
     s += pack_variant(len(obdata.polygons))
     for f in obdata.polygons:
-        # color
+        # face flags
         is_dual_sided = 0
-        color = 1                    
+        color = 1   
+
+        vlen = len(f.loop_indices)
+        if vlen<3 or vlen>4:
+            raise Exception("Only tri or quad supported (#verts: {})".format(vlen))
+
+        is_quad = vlen==4 and 0x20 or 0
+
         if len(obcontext.material_slots)>0:
             slot = obcontext.material_slots[f.material_index]
             mat = slot.material
@@ -161,9 +183,11 @@ def export_layer(layer):
             color = diffuse_to_p8color(mat.diffuse_color)
         
         # bit layout:
-        # 7-4: flags
+        # 0x20: quad
+        # 0x10: dual sided
         # 3-0: color index 
-        s += "{:02x}".format(is_dual_sided | color)
+        s += "{:02x}".format(is_quad| is_dual_sided | color)
+
         # is face part of a solid?
         face_verts = {loop_vert[li]:li for li in f.loop_indices}
         solid_group = {vgroups[k][0]:v for k,v in face_verts.items() if len(vgroups[k])==1}
@@ -178,7 +202,6 @@ def export_layer(layer):
             s += "{:02x}".format(0)
 
         # + vertex ids (= edge loop)
-        s += pack_variant(len(f.loop_indices))
         for li in f.loop_indices:
             s += pack_variant(loop_vert[li]+1)            
 
@@ -190,20 +213,17 @@ def export_layer(layer):
 # model data
 s = ""
 
-# model lod selection
-lod_dist = scene.get("lod_dist", [1024])
-s += pack_variant(len(lod_dist))
-for i in lod_dist:
-    s += "{}".format(pack_double(i))
-
 # layers = lod
 ln = 0
 ls = ""
 for i in range(2):
     lod_name = "lod{}".format(i)
     if lod_name in scene.collection.children:
+        layer = scene.collection.children[lod_name]
         ln += 1
-        ls += export_layer(scene.collection.children[lod_name])
+        # LOD visibility range
+        ls += pack_variant(int(layer.get("lod_dist", 1024)))
+        ls += export_layer(layer)
     else:
         # lod numbering discontinued
         break

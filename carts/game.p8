@@ -338,6 +338,7 @@ function draw_faces(faces)
 	for i,d in ipairs(faces) do
 		local face=d.f
 		polyfill(d,face.flags&0xf)
+		if(face.flags&0x40!=0) polylines(d,0)
 	end
 end
 
@@ -356,7 +357,7 @@ end
 function _update()
     local m=make_m_from_euler(0,0,0)
 
-    _cam:track({0,20,-50},m)
+    _cam:track({0,20,-80},m)
 end
 
 function _draw()
@@ -365,7 +366,7 @@ function _draw()
     local m=make_m_from_euler(0,time()/8,0)
     local out={}
     collect_model_faces(_models["bf109"],m,out)
-				sort(out)
+	sort(out)
     draw_faces(out)
 end
 

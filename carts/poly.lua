@@ -43,11 +43,11 @@ function polyfill(p,col)
 	end
 end
 
-function polyfill2(p,col)
+function polylines(p,col)
 	color(col)
 	local np=#p
 	for i=1,np do
 		local p0,p1=p[i%np+1],p[i]
-		line(p0.x,p0.y,p1.x,p1.y)
+		line(p0.x+0.5,p0.y+0.5,p1.x+0.5,p1.y+0.5)
 	end
 end

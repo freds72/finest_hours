@@ -175,19 +175,21 @@ def export_layer(layer):
             raise Exception("Only tri or quad supported (#verts: {})".format(vlen))
 
         is_quad = vlen==4 and 0x20 or 0
-
+        has_edges = 0
         if len(obcontext.material_slots)>0:
             slot = obcontext.material_slots[f.material_index]
             mat = slot.material
             is_dual_sided = mat.use_backface_culling==False and 0x10 or 0
             color = diffuse_to_p8color(mat.diffuse_color)
+            has_edges = mat.get('edges')=="true" and 0x40 or 0
         
         # bit layout:
+        # 0x40: edges
         # 0x20: quad
         # 0x10: dual sided
         # 3-0: color index 
-        s += "{:02x}".format(is_quad| is_dual_sided | color)
-
+        s += "{:02x}".format(has_edges | is_quad| is_dual_sided | color)
+            
         # is face part of a solid?
         face_verts = {loop_vert[li]:li for li in f.loop_indices}
         solid_group = {vgroups[k][0]:v for k,v in face_verts.items() if len(vgroups[k])==1}

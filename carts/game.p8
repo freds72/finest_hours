@@ -260,8 +260,8 @@ function collect_model_faces(model,m,out)
 	
 	-- lod selection
 	local lodid=0
-	for i=1,#model.lod_dist do
-		if(d>model.lod_dist[i]) lodid+=1
+	for i=1,#model.lods do
+		if(d>model.lods[i].dist) lodid+=1
 	end
 	-- cap to max lod if too far away
 	model=model.lods[min(lodid,#model.lods-1)+1]
@@ -346,12 +346,11 @@ end
 function unpack_models()
     -- for all models
 	unpack_array(function()
-        local model,name,scale={lods={},lod_dist={}},unpack_string(),1
+        local model,name,scale={lods={}},unpack_string(),1
         -- printh("decoding:"..name)
         -- lods
         unpack_array(function()
-            add(model.lod_dist,unpack_double())
-            local verts,lod={},{f={},groups={}}
+            local verts,lod={},{f={},dist=unpack_double(),groups={}}
             -- vertices
             unpack_array(function()
                 add(verts,{unpack_double(scale),unpack_double(scale),unpack_double(scale)})

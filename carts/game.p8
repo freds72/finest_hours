@@ -142,6 +142,62 @@ function make_m_from_v_angle(up,angle)
 	}
 end
 
+-- sort
+-- https://github.com/morgan3d/misc/tree/master/p8sort
+-- 
+function sort(data)
+	local n = #data 
+	if(n<2) return
+	
+	-- form a max heap
+	for i = n\2+1, 1, -1 do
+	 -- m is the index of the max child
+	 local parent, value, m = i, data[i], i + i
+	 local key = value.key 
+	 
+	 while m <= n do
+	  -- find the max child
+	  if ((m < n) and (data[m + 1].key > data[m].key)) m += 1
+	  local mval = data[m]
+	  if (key > mval.key) break
+	  data[parent] = mval
+	  parent = m
+	  m += m
+	 end
+	 data[parent] = value
+	end 
+   
+	-- read out the values,
+	-- restoring the heap property
+	-- after each step
+	for i = n, 2, -1 do
+	 -- swap root with last
+	 local value = data[i]
+	 data[i], data[1] = data[1], value
+   
+	 -- restore the heap
+	 local parent, terminate, m = 1, i - 1, 2
+	 local key = value.key 
+	 
+	 while m <= terminate do
+	  local mval = data[m]
+	  local mkey = mval.key
+	  if (m < terminate) and (data[m + 1].key > mkey) then
+	   m += 1
+	   mval = data[m]
+	   mkey = mval.key
+	  end
+	  if (key > mkey) break
+	  data[parent] = mval
+	  parent = m
+	  m += m
+	 end  
+	 
+	 data[parent] = value
+	end
+end
+
+
 -->8
 -- camera
 function make_cam(name)
@@ -242,8 +298,8 @@ function collect_faces(faces,cam_pos,v_cache,out)
 				if(is_clipped>0) verts=z_poly_clip(z_near,verts)
 				if #verts>2 then
 					verts.f=face
-                    -- sort key
-					verts.key=ni/(y*y+z*z)
+					-- sort key
+					verts.key=-z/ni
 					out[#out+1]=verts
 				end
 			end
@@ -300,15 +356,16 @@ end
 function _update()
     local m=make_m_from_euler(0,0,0)
 
-    _cam:track({0,20,-100},m)
+    _cam:track({0,20,-50},m)
 end
 
 function _draw()
     cls(1)
 
-    local m=make_m_from_euler(0,time()/4,0)
+    local m=make_m_from_euler(0,time()/8,0)
     local out={}
     collect_model_faces(_models["bf109"],m,out)
+				sort(out)
     draw_faces(out)
 end
 

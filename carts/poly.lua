@@ -42,3 +42,12 @@ function polyfill(p,col)
 		rx+=rdx
 	end
 end
+
+function polyfill2(p,col)
+	color(col)
+	local np=#p
+	for i=1,np do
+		local p0,p1=p[i%np+1],p[i]
+		line(p0.x,p0.y,p1.x,p1.y)
+	end
+end

@@ -3,7 +3,9 @@ import bmesh
 import argparse
 import sys
 import os
+import re
 from mathutils import Vector, Matrix
+from collections import defaultdict
 
 # pack helpers
 def tohex(val, nbits):
@@ -139,6 +141,44 @@ solid_db = {
 def pack_vector(co):
     return "{}{}{}".format(pack_double(co.x), pack_double(co.z), pack_double(co.y))
 
+def pack_face(f, obcontext, loop_vert, decals = None):
+    s = ""
+    # face flags
+    has_decals = decals and 0x80 or 0
+    is_dual_sided = 0
+    color = 1   
+
+    vlen = len(f.loop_indices)
+    if vlen<3 or vlen>4:
+        raise Exception("Only tri or quad supported (#verts: {})".format(vlen))
+
+    is_quad = vlen==4 and 0x20 or 0
+    has_edges = 0
+    if len(obcontext.material_slots)>0:
+        slot = obcontext.material_slots[f.material_index]
+        mat = slot.material
+        is_dual_sided = mat.use_backface_culling==False and 0x10 or 0
+        color = diffuse_to_p8color(mat.diffuse_color)
+        has_edges = mat.get('edges')=="true" and 0x40 or 0
+    
+    # bit layout:
+    # 0x80: decals
+    # 0x40: edges
+    # 0x20: quad
+    # 0x10: dual sided
+    # 3-0: color index 
+    s += "{:02x}".format(has_decals | has_edges | is_quad| is_dual_sided | color)
+
+    # + vertex ids (= edge loop)
+    for li in f.loop_indices:
+        s += pack_variant(loop_vert[li]+1) 
+
+    if decals:
+        s += pack_variant(len(decals)) 
+        for decal_face in decals:
+            s += pack_face(decal_face, obcontext, loop_vert)
+    return s  
+
 def export_layer(layer):
     # data
     s = ""
@@ -157,59 +197,53 @@ def export_layer(layer):
     # create a map loop index -> vertex index (see: https://www.python.org/dev/peps/pep-0274/)
     loop_vert = {l.index:l.vertex_index for l in obdata.loops}
 
-    vlen = len(obdata.vertices)
-    # vertices
-    s += pack_variant(vlen)
+    # Blender vgroup API sillyness...
+    gname_by_face = {}
+    face_by_gname = {}
+    for f in obdata.polygons:
+        counts = defaultdict(int)
+        # count number of vertices per group
+        for li in f.loop_indices:
+            vi = loop_vert[li]
+            for gname in vgroups[vi]:
+                counts[gname] +=1
+        # face is in group if all vertices are in a given group
+        for gname,count in counts.items():
+            if count == len(f.loop_indices):
+                if f in gname_by_face:
+                    raise Exception("Face: {} already registered in group: {}".format(f.index, gname_by_face[f]))
+                gname_by_face[f] = gname
+                face_by_gname[gname] = f
+
+    # find decal faces
+    decal_faces_by_parent = defaultdict(set)  
+    decal_faces = set()
+    decal_re = re.compile(r"(.*):decal")
+    for f, gname in gname_by_face.items():
+        result = decal_re.match(gname)
+        # find group name
+        if result:
+            decal_gname = result.groups()[0]
+            if decal_gname in face_by_gname:
+                # parent group => face
+                parent = face_by_gname[decal_gname]
+                decal_faces_by_parent[parent].add(f)
+                decal_faces.add(f)
+
+    # all vertices
+    s += pack_variant(len(obdata.vertices))
     for v in obdata.vertices:
         s += pack_vector(v.co)
 
-    # faces
-    s += pack_variant(len(obdata.polygons))
-    for f in obdata.polygons:
-        # face flags
-        is_dual_sided = 0
-        color = 1   
-
-        vlen = len(f.loop_indices)
-        if vlen<3 or vlen>4:
-            raise Exception("Only tri or quad supported (#verts: {})".format(vlen))
-
-        is_quad = vlen==4 and 0x20 or 0
-        has_edges = 0
-        if len(obcontext.material_slots)>0:
-            slot = obcontext.material_slots[f.material_index]
-            mat = slot.material
-            is_dual_sided = mat.use_backface_culling==False and 0x10 or 0
-            color = diffuse_to_p8color(mat.diffuse_color)
-            has_edges = mat.get('edges')=="true" and 0x40 or 0
-        
-        # bit layout:
-        # 0x40: edges
-        # 0x20: quad
-        # 0x10: dual sided
-        # 3-0: color index 
-        s += "{:02x}".format(has_edges | is_quad| is_dual_sided | color)
-            
-        # is face part of a solid?
-        face_verts = {loop_vert[li]:li for li in f.loop_indices}
-        solid_group = {vgroups[k][0]:v for k,v in face_verts.items() if len(vgroups[k])==1}
-        solid_group = set([solid_db[k] for k,v in solid_group.items() if k in solid_db])
-        if len(solid_group)>1:
-            raise Exception('Multiple vertex groups for the same face') 
-        if len(solid_group)==1:
-            # get group ID
-            solid_group=solid_group.pop()
-            s += "{:02x}".format(solid_group)
-        else:
-            s += "{:02x}".format(0)
-
-        # + vertex ids (= edge loop)
-        for li in f.loop_indices:
-            s += pack_variant(loop_vert[li]+1)            
+    # faces (remove decal faces)
+    polygons = list([p for p in obdata.polygons if p not in decal_faces])
+    s += pack_variant(len(polygons))
+    for f in polygons:
+        s += pack_face(f, obcontext, loop_vert, decals = decal_faces_by_parent.get(f, None))      
 
         # normal
-        s += pack_vector(f.normal)
-        
+        s += pack_vector(f.normal)    
+
     return s
 
 # model data

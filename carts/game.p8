@@ -233,13 +233,13 @@ function make_cam(name)
 			up=v_normz(v_lerp(up,target_u,0.1))
 			
 			-- pos tracking (without view offset)
-			target_pos=v_lerp(target_pos,pos,0.2)
+			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),50),0.2)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
 
 			-- shift cam position			
-			pos=v_add(v_add(target_pos,m_fwd(m),-80),up,20)
+			pos=v_add(target_pos,up,20)
 
             -- clone matrix
             local m={unpack(m)}		
@@ -397,16 +397,8 @@ function collect_faces(model,m,out)
 				if(is_clipped>0) verts=z_poly_clip(z_near,verts)
 				if #verts>2 then
 					verts.f=face
-					-- shaded color
-					local light=-mid(v_dot(sun,face.n),-1,1)
-					if light>0 then
-						-- pick base shaded color
-						-- todo: get shininess from model
-						verts.c=face.ramp[(light<<2)\1]
-					else
-						-- todo: get from model / use diffuse anyway?
-						verts.c=0x11
-					end
+					verts.light=mid(-v_dot(sun,face.n),-1,1)
+					verts.cache=v_cache
 					-- sort key
 					-- todo: improve
 					verts.key=-z/ni
@@ -418,11 +410,40 @@ function collect_faces(model,m,out)
 end
 
 -- draw face
+function draw_face(v0,v1,v2,v3,col)
+	if v0.outcode&v1.outcode&v2.outcode&(v3 and v3.outcode or 0xffff)==0 then
+		local verts={v0,v1,v2,v3}
+		if(v0.clipcode+v1.clipcode+v2.clipcode+(v3 and v3.clipcode or 0)>0) verts=z_poly_clip(z_near,verts)
+		if(#verts>2) polyfill(verts,col)
+	end
+end
+
 function draw_faces(faces)
 	for i,d in ipairs(faces) do
-		local face=d.f
-		polyfill(d,d.c)
-		if(face.edges) polylines(d,0)
+		-- todo: get dark color from model / use diffuse anyway?
+		local main_face,light,col=d.f,d.light,0x11
+		if light>0 then
+			-- pick base shaded color
+			-- todo: get shininess from model
+			col=main_face.ramp[(light<<2)\1]
+		end
+
+		polyfill(d,col)
+		-- decals?
+		-- todo: hide decals when face is unlit??
+		if main_face.inner then
+			-- reuse array
+			for _,face in pairs(main_face.inner) do
+				local v_cache,v4=d.cache,face[4]
+				-- reuse light information
+				if light>0 then
+					col=face.ramp[(light<<2)\1]
+				end
+				draw_face(v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4],col)
+			end
+		end
+
+		if(main_face.edges) polylines(d,0)
 	end
 end
 
@@ -516,7 +537,7 @@ function _update()
 	_player_ttl-=1
 	if(_player_ttl<0) _player_ttl=10+rnd(15) _player_da=(1-rnd(2))/64
 	
-	_player_orient=make_m_from_euler(0,cos(time()/16),_player_angle)
+	_player_orient=make_m_from_euler(0,0,_player_angle)
 	_player_pos=v_add(_player_pos,m_fwd(_player_orient),-8)
 	m_set_pos(_player_orient,_player_pos)
 
@@ -536,6 +557,9 @@ function _draw()
     draw_faces(out)
 
 	fillp()
+
+	-- memory
+	-- print(stat(0).."b",2,2,8)
 end
 
 -->8
@@ -576,18 +600,13 @@ function unpack_models(ramps)
         -- printh("decoding:"..name)
         -- lods
         unpack_array(function()
-            local verts,lod={},{f={},dist=unpack_double(),groups={}}
+            local verts,lod={},{f={},dist=unpack_double()}
             -- vertices
             unpack_array(function()
                 add(verts,{unpack_double(scale),unpack_double(scale),unpack_double(scale)})
             end)
-
-            -- faces
-            unpack_array(function(i)				
-                local flags,f=mpeek(),add(lod.f,{gid=mpeek()})
-                -- collision group
-                if(f.gid>0) lod.groups[f.gid]=1+(lod.groups[f.gid] or 0)
-
+			local function unpack_face()			
+                local flags,f=mpeek(),{}
 				-- colors
 				f.ramp=ramps[flags&0xf]
 
@@ -602,6 +621,21 @@ function unpack_models(ramps)
                     -- direct reference to vertex
                     f[i]=verts[unpack_variant()]
                 end
+
+				-- inner faces?
+				if flags&0x80!=0 then
+					f.inner={}
+					unpack_array(function()
+						add(f.inner,unpack_face())
+					end)
+				end
+
+				return f
+			end
+
+            -- faces
+            unpack_array(function()				
+				local f=add(lod.f,unpack_face())
                 -- normal
                 f.n={unpack_double(),unpack_double(),unpack_double()}
                 -- n.p cache

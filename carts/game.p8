@@ -81,6 +81,11 @@ function v_normz(v)
 end
 
 -- matrix functions
+local _m_unit={
+	1,0,0,0,
+	0,1,0,0,
+	0,0,1,0,
+	0,0,0,0}
 function make_m_from_euler(x,y,z)
 		local a,b = cos(x),-sin(x)
 		local c,d = cos(y),-sin(y)
@@ -233,7 +238,7 @@ function make_cam(name)
 			up=v_normz(v_lerp(up,target_u,0.1))
 			
 			-- pos tracking (without view offset)
-			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),50),0.2)
+			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-50),0.2)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
@@ -528,17 +533,25 @@ function _init()
     _cam=make_cam("main")
 end
 
-_player_angle=0
-_player_da=0
+-- todo: move to a proper player class
+_player_angle={0,0,0}
+_player_da={0,0,0}
 _player_ttl=0
 _player_pos={0,60,0}
 function _update()
-	_player_angle+=_player_da
-	_player_ttl-=1
-	if(_player_ttl<0) _player_ttl=10+rnd(15) _player_da=(1-rnd(2))/64
+	-- input damping
+	v_scale(_player_da,0.8)
+
+	local roll,pitch=0,0
+	if(btn(0)) roll=-1
+	if(btn(1)) roll=1
+	if(btn(2)) pitch=1
+	if(btn(3)) pitch=-1
+	_player_da=v_add(_player_da,{pitch,0,roll},1/192)
+	_player_angle=v_add(_player_angle,_player_da)
 	
-	_player_orient=make_m_from_euler(0,0,_player_angle)
-	_player_pos=v_add(_player_pos,m_fwd(_player_orient),-8)
+	_player_orient=make_m_from_euler(unpack(_player_angle))
+	_player_pos=v_add(_player_pos,m_fwd(_player_orient),4)
 	m_set_pos(_player_orient,_player_pos)
 
     _cam:track(_player_pos,_player_orient)
@@ -549,6 +562,8 @@ function _draw()
 
     local out={}
     collect_faces(_models["bf109"],_player_orient,out)
+
+    collect_faces(_models["mountain"],_m_unit,out)
 	sort(out)
 
 	-- dithered fill mode

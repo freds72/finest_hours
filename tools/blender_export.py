@@ -23,7 +23,7 @@ def pack_variant(x):
             raise Exception('Unable to convert: {} into a word: {}'.format(x,h))
         return h
     # 1 byte
-    h = "{:02x}".format(x)
+    h = pack_byte(x)
     if len(h)!=2:
         raise Exception('Unable to convert: {} into a byte: {}'.format(x,h))
     return h
@@ -58,7 +58,7 @@ def pack_fixed(x):
 
 # short must be between -127/127
 def pack_short(x):
-    h = "{:02x}".format(int(round(x+128,0)))
+    h = pack_byte(int(round(x+128,0)))
     if len(h)!=2:
         raise Exception('Unable to convert: {} into a byte: {}'.format(x,h))
     return h
@@ -66,7 +66,7 @@ def pack_short(x):
 # float must be between -4/+3.968 resolution: 0.03125
 # 1 byte
 def pack_float(x):
-    h = "{:02x}".format(int(round(32*x+128,0)))
+    h = pack_byte(int(round(32*x+128,0)))
     if len(h)!=2:
         raise Exception('Unable to convert: {} into a byte: {}'.format(x,h))
     return h
@@ -141,33 +141,53 @@ solid_db = {
 def pack_vector(co):
     return "{}{}{}".format(pack_double(co.x), pack_double(co.z), pack_double(co.y))
 
-def pack_face(f, obcontext, loop_vert, decals = None):
+# face flags bit layout:
+FACE_FLAG_ANIMFRAME = 0x10
+FACE_FLAG_DECALS = 0x8
+FACE_FLAG_EDGES = 0x4
+FACE_FLAG_QUAD = 0x2
+FACE_FLAG_DUALSIDED=0x1
+
+def pack_face(f, obcontext, loop_vert, gname=None, decals = None):
     s = ""
     # face flags
-    has_decals = decals and 0x80 or 0
-    is_dual_sided = 0
+    decals_bit = decals and FACE_FLAG_DECALS or 0
+    dualsided_bit = 0
+    # "animation" frame?
+    animframe_bit = 0
+    frame_id = -1
+    if gname:
+        frame_re = re.compile(r"frame:([0-9]+)")
+        result = frame_re.match(gname)
+        if result:
+            animframe_bit = FACE_FLAG_ANIMFRAME
+            frame_id = int(result.groups()[0])
+    
+    # default color
     color = 1   
 
     vlen = len(f.loop_indices)
     if vlen<3 or vlen>4:
         raise Exception("Only tri or quad supported (#verts: {})".format(vlen))
 
-    is_quad = vlen==4 and 0x20 or 0
-    has_edges = 0
+    quad_bit = vlen==4 and FACE_FLAG_QUAD or 0
+    edges_bit = 0
     if len(obcontext.material_slots)>0:
         slot = obcontext.material_slots[f.material_index]
         mat = slot.material
-        is_dual_sided = mat.use_backface_culling==False and 0x10 or 0
+        dualsided_bit = mat.use_backface_culling==False and FACE_FLAG_DUALSIDED or 0
         color = diffuse_to_p8color(mat.diffuse_color)
-        has_edges = mat.get('edges')=="true" and 0x40 or 0
+        edges_bit = mat.get('edges')=="true" and FACE_FLAG_EDGES or 0
     
-    # bit layout:
-    # 0x80: decals
-    # 0x40: edges
-    # 0x20: quad
-    # 0x10: dual sided
-    # 3-0: color index 
-    s += "{:02x}".format(has_decals | has_edges | is_quad| is_dual_sided | color)
+    # flags
+    s += pack_byte(animframe_bit | decals_bit | edges_bit | quad_bit | dualsided_bit)
+
+    # color + frame number (if any)
+    s += pack_byte(color)
+
+    # frame id (if any)
+    if frame_id != -1:
+        s += pack_byte(frame_id)
 
     # + vertex ids (= edge loop)
     for li in f.loop_indices:
@@ -218,7 +238,7 @@ def export_layer(layer):
     # find decal faces
     decal_faces_by_parent = defaultdict(set)  
     decal_faces = set()
-    decal_re = re.compile(r"(.*):decal")
+    decal_re = re.compile(r"(.+):decal")
     for f, gname in gname_by_face.items():
         result = decal_re.match(gname)
         # find group name
@@ -239,7 +259,7 @@ def export_layer(layer):
     polygons = list([p for p in obdata.polygons if p not in decal_faces])
     s += pack_variant(len(polygons))
     for f in polygons:
-        s += pack_face(f, obcontext, loop_vert, decals = decal_faces_by_parent.get(f, None))      
+        s += pack_face(f, obcontext, loop_vert, gname=gname_by_face.get(f,None), decals = decal_faces_by_parent.get(f, None))      
 
         # normal
         s += pack_vector(f.normal)    

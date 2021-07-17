@@ -7,6 +7,7 @@ __lua__
 
 -- globals
 local _models,_sun_dir,_cam,_plyr={},{0,-0.707,0.707}
+local _tick=0
 
 local k_far,k_near=0,2
 local k_right,k_left=4,8
@@ -381,7 +382,10 @@ function collect_faces(model,m,out)
 	-- vertex cache (and model context)
 	local v_cache=setmetatable({m=m_x_m(_cam.m,m)},v_cache_cls)
 
+	-- todo: get animation speed from model
+	local tick=_tick%3
 	for _,face in pairs(model.f) do
+		if (face.frame and face.frame!=tick) goto skip
 		if face.dual_sided or v_dot(face.n,cam_pos)>face.cp then
 			-- project vertices
 			local v4=face[4]
@@ -411,6 +415,7 @@ function collect_faces(model,m,out)
 				end
 			end
 		end
+		::skip::
 	end
 end
 
@@ -620,6 +625,7 @@ function _update()
 	_plyr:update()
 
     _cam:track(_plyr.pos,_plyr.m)
+	_tick+=1
 end
 
 function _draw()
@@ -688,16 +694,17 @@ function unpack_models(ramps)
                 add(verts,{unpack_double(scale),unpack_double(scale),unpack_double(scale)})
             end)
 			local function unpack_face()			
-                local flags,f=mpeek(),{}
-				-- colors
-				f.ramp=ramps[flags&0xf]
-
+                local flags,f=mpeek(),{ramp=ramps[mpeek()]}
+				-- animation frame?
+				if(flags&0x10!=0) f.frame=mpeek()
 				-- backface?
-				if(flags&0x10!=0) f.dual_sided=true
+				if(flags&0x1!=0) f.dual_sided=true
 				-- edge rendering?
-				if(flags&0x40!=0) f.edges=true
+				if(flags&0x4!=0) f.edges=true
+
                 -- quad?
-                f.ni=(flags&0x20!=0) and 4 or 3
+                f.ni=(flags&0x2!=0) and 4 or 3
+
                 -- vertex indices
                 for i=1,f.ni do
                     -- direct reference to vertex
@@ -705,7 +712,7 @@ function unpack_models(ramps)
                 end
 
 				-- inner faces?
-				if flags&0x80!=0 then
+				if flags&0x8!=0 then
 					f.inner={}
 					unpack_array(function()
 						add(f.inner,unpack_face())

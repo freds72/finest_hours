@@ -6,11 +6,11 @@ __lua__
 #include poly.lua
 
 -- globals
-local _models,_sun_dir,_cam={},{0,-0.707,0.707}
+local _models,_sun_dir,_cam,_plyr={},{0,-0.707,0.707}
 
 local k_far,k_near=0,2
 local k_right,k_left=4,8
-local z_near=1
+local z_near=8
 
 
 -- maths & cam
@@ -235,16 +235,16 @@ function make_cam(name)
 		track=function(self,pos,m)
 			local target_u=m_up(m)
 			-- orientation tracking
-			up=v_normz(v_lerp(up,target_u,0.1))
+			up=v_normz(v_lerp(up,target_u,0.2))
 			
 			-- pos tracking (without view offset)
-			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-50),0.2)
+			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-60),0.05)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
 
 			-- shift cam position			
-			pos=v_add(target_pos,up,20)
+			pos=v_add(target_pos,up,30)
 
             -- clone matrix
             local m={unpack(m)}		
@@ -402,7 +402,7 @@ function collect_faces(model,m,out)
 				if(is_clipped>0) verts=z_poly_clip(z_near,verts)
 				if #verts>2 then
 					verts.f=face
-					verts.light=mid(-v_dot(sun,face.n),-1,1)
+					verts.light=mid(-v_dot(sun,face.n),0,1)
 					verts.cache=v_cache
 					-- sort key
 					-- todo: improve
@@ -425,26 +425,19 @@ end
 
 function draw_faces(faces)
 	for i,d in ipairs(faces) do
-		-- todo: get dark color from model / use diffuse anyway?
-		local main_face,light,col=d.f,d.light,0x11
-		if light>0 then
-			-- pick base shaded color
-			-- todo: get shininess from model
-			col=main_face.ramp[(light<<2)\1]
-		end
+		-- todo: fix (why *16 doesn't work for light???)
+		local main_face,light,col=d.f,(d.light<<3)\1
+		-- todo: get shininess factor from model
+		local col=main_face.ramp[light]
 
 		polyfill(d,col)
-		-- decals?
-		-- todo: hide decals when face is unlit??
-		if main_face.inner then
+		-- decals? (hiden when unlit)
+		if light>0 and main_face.inner then
 			-- reuse array
 			for _,face in pairs(main_face.inner) do
 				local v_cache,v4=d.cache,face[4]
-				-- reuse light information
-				if light>0 then
-					col=face.ramp[(light<<2)\1]
-				end
-				draw_face(v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4],col)
+				-- reuse light info
+				draw_face(v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4],face.ramp[light])
 			end
 		end
 
@@ -509,6 +502,86 @@ function draw_ground()
 end
 
 -->8
+-- player
+function make_player(pos)
+	local time_t=0
+	local roll,pitch=0,0
+	local yaw,dyaw=0,0
+	local power,rpm=0,0
+	local forces,velocity,angularv={0,0,0},{0,0,0},{0,0,0}
+
+	return {
+		pos=v_clone(pos),
+		m=make_m_from_euler(0,0,0),
+		apply_force=function(self,v,scale)
+			scale=scale or 1
+			forces=v_add(forces,v,scale/30)
+		end,
+		update=function(self)
+			time_t+=1
+			local dpow,dy,dp,dr=0,0,0,0
+			if(btn(4)) dpow=1
+			if(btn(5)) dpow=-1
+			if(btn(0)) dr=1
+			if(btn(1)) dr=-1
+			if(btn(2)) dp=1
+			if(btn(3)) dp=-1			
+			
+			local fwd,up,right=m_fwd(self.m),m_up(self.m),m_right(self.m)
+
+			-- gravity
+			self:apply_force({0,-1,0})
+
+			-- power --> rpm
+			power=mid(power+dpow/4,0,100)			
+			rpm=lerp(rpm,power,0.6)
+			self:apply_force(fwd,rpm/64)
+
+			-- controls
+			roll*=0.8
+			roll+=dr/1024
+			pitch*=0.8
+			pitch+=dp/2048
+
+			-- lift?
+			local vn,vlen=v_normz(velocity)
+			self.vlen=vlen
+			
+			local lift=vlen*vlen*(1-v_dot(vn,fwd)/2)
+			self.lift=lift
+			local antilift=v_dot(up,vn)
+			-- todo: fix
+			self:apply_force(up,lift*(antilift>0 and -1 or 1))
+
+			-- drag
+			self:apply_force(velocity,-lift/5)
+
+			-- tail drag
+			local drag=-vlen*vlen*v_dot(vn,right)/80
+			self:apply_force(right,drag)
+			yaw*=0.4
+			yaw=-drag
+
+			-- integrate
+			velocity=v_add(velocity,forces)
+
+			-- move
+			self.pos=v_add(self.pos,velocity)
+
+			if self.pos[2]<0 then
+				self.pos[2]=0
+				velocity[2]=0
+			end
+
+			self.m=m_x_m(self.m,make_m_from_euler(pitch,yaw,roll))
+			m_set_pos(self.m,self.pos)
+			forces={0,0,0}
+		end		
+	}
+end
+
+
+-->8
 -- update & main loop
 function _init()
     -- enable 0x8000 memory region
@@ -518,7 +591,7 @@ function _init()
 	-- get from spritesheet
 	for c=0,15 do
 		local ramp={}
-		for i=0,3 do
+		for i=0,6 do
 			local base=sget(i,c)
 			-- solid color
 			ramp[2*i]=base*0x11
@@ -531,39 +604,33 @@ function _init()
     decompress(0x8000,unpack_models,ramps)
 
     _cam=make_cam("main")
+	_plyr=make_player({0,60,0})
+
+	_props={}
+	for i=1,5 do
+		local pos,m={512*cos(i/6),0,512*sin(i/6)},make_m_from_euler(0,rnd(),0)
+		m_set_pos(m,pos)
+		add(_props,{
+			model=_models["mountain"],
+			m=m})
+	end
 end
 
--- todo: move to a proper player class
-_player_angle={0,0,0}
-_player_da={0,0,0}
-_player_ttl=0
-_player_pos={0,60,0}
 function _update()
-	-- input damping
-	v_scale(_player_da,0.8)
+	_plyr:update()
 
-	local roll,pitch=0,0
-	if(btn(0)) roll=-1
-	if(btn(1)) roll=1
-	if(btn(2)) pitch=1
-	if(btn(3)) pitch=-1
-	_player_da=v_add(_player_da,{pitch,0,roll},1/192)
-	_player_angle=v_add(_player_angle,_player_da)
-	
-	_player_orient=make_m_from_euler(unpack(_player_angle))
-	_player_pos=v_add(_player_pos,m_fwd(_player_orient),4)
-	m_set_pos(_player_orient,_player_pos)
-
-    _cam:track(_player_pos,_player_orient)
+    _cam:track(_plyr.pos,_plyr.m)
 end
 
 function _draw()
     draw_ground()
 
     local out={}
-    collect_faces(_models["bf109"],_player_orient,out)
+    collect_faces(_models["bf109"],_plyr.m,out)
 
-    collect_faces(_models["mountain"],_m_unit,out)
+	for _,prop in pairs(_props) do
+    	collect_faces(prop.model,prop.m,out)
+	end
 	sort(out)
 
 	-- dithered fill mode
@@ -665,18 +732,18 @@ function unpack_models(ramps)
 end
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-01c77000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-128e7000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-13bba000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-249aa000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-1567a000500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-567aa000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-67aaa000700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-28ef7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-49f7a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-9aaaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-3bbaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-1c777000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-5d677000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-2e8ee000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-5faaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0011cc77100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+012888e7200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+01333bba300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+124499aa400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0155567a500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+156677aa600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+16777aaa700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+12288ef7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+14499f77000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+19aaa777000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+133bbba7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+011cc777000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+15d66677000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+022eefaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+15fffaa7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000

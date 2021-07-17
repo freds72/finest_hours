@@ -6,7 +6,7 @@ __lua__
 #include poly.lua
 
 -- globals
-local _models={}
+local _models,_sun_dir,_cam={},{-0.707,-0.707,0}
 
 local k_far,k_near=0,2
 local k_right,k_left=4,8
@@ -81,11 +81,6 @@ function v_normz(v)
 end
 
 -- matrix functions
-function m_x_v(m,v)
-	local x,y,z=v[1],v[2],v[3]
-	return {m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]}
-end
-
 function make_m_from_euler(x,y,z)
 		local a,b = cos(x),-sin(x)
 		local c,d = cos(y),-sin(y)
@@ -100,10 +95,21 @@ function make_m_from_euler(x,y,z)
 	  0,0,0,1}
 end
 
+function m_x_v(m,v)
+	local x,y,z=v[1],v[2],v[3]
+	return {m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]}
+end
+
 -- inline matrix vector multiply invert
 -- inc. position
 function m_inv_x_v(m,v)
 	local x,y,z=v[1]-m[13],v[2]-m[14],v[3]-m[15]
+	return {m[1]*x+m[2]*y+m[3]*z,m[5]*x+m[6]*y+m[7]*z,m[9]*x+m[10]*y+m[11]*z}
+end
+-- inline matrix vector multiply invert
+-- excl. position
+function m_inv_x_n(m,v)
+	local x,y,z=v[1],v[2],v[3]
 	return {m[1]*x+m[2]*y+m[3]*z,m[5]*x+m[6]*y+m[7]*z,m[9]*x+m[10]*y+m[11]*z}
 end
 
@@ -119,14 +125,14 @@ function m_fwd(m)
 end
 -- optimized 4x4 matrix mulitply
 function m_x_m(a,b)
-	local a11,a21,a31,_,a12,a22,a32,_,a13,a23,a33,_,a14,a24,a34=unpack(a)
-	local b11,b21,b31,_,b12,b22,b32,_,b13,b23,b33,_,b14,b24,b34=unpack(b)
+	local a11,a12,a13,a21,a22,a23,a31,a32,a33=a[1],a[5],a[9],a[2],a[6],a[10],a[3],a[7],a[11]
+	local b11,b12,b13,b14,b21,b22,b23,b24,b31,b32,b33,b34=b[1],b[5],b[9],b[13],b[2],b[6],b[10],b[14],b[3],b[7],b[11],b[15]
 
 	return {
 			a11*b11+a12*b21+a13*b31,a21*b11+a22*b21+a23*b31,a31*b11+a32*b21+a33*b31,0,
 			a11*b12+a12*b22+a13*b32,a21*b12+a22*b22+a23*b32,a31*b12+a32*b22+a33*b32,0,
 			a11*b13+a12*b23+a13*b33,a21*b13+a22*b23+a23*b33,a31*b13+a32*b23+a33*b33,0,
-			a11*b14+a12*b24+a13*b34+a14,a21*b14+a22*b24+a23*b34+a24,a31*b14+a32*b24+a33*b34+a34,1
+			a11*b14+a12*b24+a13*b34+a[13],a21*b14+a22*b24+a23*b34+a[14],a31*b14+a32*b24+a33*b34+a[15],1
 		}
 end
 
@@ -275,10 +281,30 @@ local v_cache_cls={
 	end
 }
 
-function collect_faces(faces,cam_pos,v_cache,out)
-	for _,face in pairs(faces) do
-		-- avoid overdraw for shared faces
-		if face.flags&0x10!=0 or v_dot(face.n,cam_pos)>face.cp then
+function collect_faces(model,m,out)
+	-- cam pos in object space
+	local cam_pos=m_inv_x_v(m,_cam.pos)
+	-- sun vector in model space	
+	local sun=m_inv_x_n(m,_sun_dir)
+	
+	-- select lod
+	local d=v_dot(cam_pos,cam_pos)
+	
+	-- lod selection
+	local lodid=0
+	for i=1,#model.lods do
+		if(d>model.lods[i].dist) lodid+=1
+	end
+	-- cap to max lod if too far away
+	model=model.lods[min(lodid,#model.lods-1)+1]
+
+	-- object to world
+	-- world to cam
+	-- vertex cache (and model context)
+	local v_cache=setmetatable({m=m_x_m(_cam.m,m)},v_cache_cls)
+
+	for _,face in pairs(model.f) do
+		if face.dual_sided or v_dot(face.n,cam_pos)>face.cp then
 			-- project vertices
 			local v4=face[4]
 			local v0,v1,v2,v3=v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4]			
@@ -298,7 +324,18 @@ function collect_faces(faces,cam_pos,v_cache,out)
 				if(is_clipped>0) verts=z_poly_clip(z_near,verts)
 				if #verts>2 then
 					verts.f=face
+					-- shaded color
+					local light=-mid(v_dot(sun,face.n),-1,1)
+					if light>0 then
+						-- pick base shaded color
+						-- todo: get shininess from model
+						verts.c=face.ramp[(light<<2)\1]
+					else
+						-- todo: get from model / use diffuse anyway?
+						verts.c=0x11
+					end
 					-- sort key
+					-- todo: improve
 					verts.key=-z/ni
 					out[#out+1]=verts
 				end
@@ -307,38 +344,12 @@ function collect_faces(faces,cam_pos,v_cache,out)
 	end
 end
 
-function collect_model_faces(model,m,out)
-	-- cam pos in object space
-	local cam_pos=m_inv_x_v(m,_cam.pos)
-	
-	-- select lod
-	local d=v_dot(cam_pos,cam_pos)
-	
-	-- lod selection
-	local lodid=0
-	for i=1,#model.lods do
-		if(d>model.lods[i].dist) lodid+=1
-	end
-	-- cap to max lod if too far away
-	model=model.lods[min(lodid,#model.lods-1)+1]
-
-	-- object to world
-	-- world to cam
-	m=m_x_m(_cam.m,m)
-
-	-- vertex cache (and model context)
-	local p=setmetatable({m=m},v_cache_cls)
-
-	-- main model
-	collect_faces(model.f,cam_pos,p,out)
-end
-
 -- draw face
 function draw_faces(faces)
 	for i,d in ipairs(faces) do
 		local face=d.f
-		polyfill(d,face.flags&0xf)
-		if(face.flags&0x40!=0) polylines(d,0)
+		polyfill(d,d.c)
+		if(face.edges) polylines(d,0)
 	end
 end
 
@@ -348,26 +359,45 @@ function _init()
     -- enable 0x8000 memory region
     poke(0x5f36,0x10)
 
+	local ramps={}
+	-- get from spritesheet
+	for c=0,15 do
+		local ramp={}
+		for i=0,3 do
+			local base=sget(i,c)
+			-- solid color
+			ramp[2*i]=base*0x11
+			-- intermediate color (dithered)
+			ramp[2*i+1]=base|sget(i+1,c)<<4
+		end
+		ramps[c]=ramp
+	end
     -- unpack models
-    decompress(0x8000,unpack_models)
+    decompress(0x8000,unpack_models,ramps)
 
     _cam=make_cam("main")
 end
 
 function _update()
-    local m=make_m_from_euler(0,0,0)
-
-    _cam:track({0,20,-80},m)
+    local m=make_m_from_euler(0,time()/8,0)
+	local pos=v_add({0,20,0},m_fwd(m),-80)
+    _cam:track(pos,m)
 end
 
 function _draw()
-    cls(1)
+    cls(12)
 
-    local m=make_m_from_euler(0,time()/8,0)
+    local m=make_m_from_euler(0,0,time()/16)
     local out={}
-    collect_model_faces(_models["bf109"],m,out)
+    collect_faces(_models["bf109"],m,out)
 	sort(out)
+
+	-- dithered fill mode
+  	fillp(0xa5a5)
+
     draw_faces(out)
+
+	fillp()
 end
 
 -->8
@@ -401,7 +431,7 @@ function unpack_string()
 	return s
 end
 
-function unpack_models()
+function unpack_models(ramps)
     -- for all models
 	unpack_array(function()
         local model,name,scale={lods={}},unpack_string(),1
@@ -415,13 +445,20 @@ function unpack_models()
             end)
 
             -- faces
-            unpack_array(function(i)
-                local f=add(lod.f,{flags=mpeek(),gid=mpeek()})
+            unpack_array(function(i)				
+                local flags,f=mpeek(),add(lod.f,{gid=mpeek()})
                 -- collision group
                 if(f.gid>0) lod.groups[f.gid]=1+(lod.groups[f.gid] or 0)
 
+				-- colors
+				f.ramp=ramps[flags&0xf]
+
+				-- backface?
+				if(flags&0x10!=0) f.dual_sided=true
+				-- edge rendering?
+				if(flags&0x40!=0) f.edges=true
                 -- quad?
-                f.ni=(f.flags&0x20!=0) and 4 or 3
+                f.ni=(flags&0x20!=0) and 4 or 3
                 -- vertex indices
                 for i=1,f.ni do
                     -- direct reference to vertex
@@ -440,3 +477,19 @@ function unpack_models()
 	end)
 end
 __gfx__
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+01c77000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+128e7000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+13bba000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+249aa000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+1567a000500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+567aa000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+67aaa000700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+28ef7000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+49f7a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+9aaaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+3bbaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+1c777000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+5d677000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+2e8ee000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+5faaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000

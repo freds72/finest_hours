@@ -6,7 +6,7 @@ __lua__
 #include poly.lua
 
 -- globals
-local _models,_sun_dir,_cam={},{-0.707,-0.707,0}
+local _models,_sun_dir,_cam={},{0,-0.707,0.707}
 
 local k_far,k_near=0,2
 local k_right,k_left=4,8
@@ -95,6 +95,12 @@ function make_m_from_euler(x,y,z)
 	  0,0,0,1}
 end
 
+function m_set_pos(m,v)
+	m[13]=v[1]
+	m[14]=v[2]
+	m[15]=v[3]
+end
+
 function m_x_v(m,v)
 	local x,y,z=v[1],v[2],v[3]
 	return {m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]}
@@ -138,6 +144,17 @@ end
 
 function make_m_from_v_angle(up,angle)
 	local fwd={-sin(angle),0,cos(angle)}
+	local right=v_normz(v_cross(up,fwd))
+	fwd=v_cross(right,up)
+	return {
+		right[1],right[2],right[3],0,
+		up[1],up[2],up[3],0,
+		fwd[1],fwd[2],fwd[3],0,
+		0,0,0,1
+	}
+end
+
+function make_m_look_at(up,fwd)
 	local right=v_normz(v_cross(up,fwd))
 	fwd=v_cross(right,up)
 	return {
@@ -205,11 +222,25 @@ end
 
 
 -->8
--- camera
+-- tracking camera
 function make_cam(name)
+	local up,target_pos={0,1,0},{0,0,0}
     return {
-	    pos={0,0,0},    
+	    pos=pos,    
 		track=function(self,pos,m)
+			local target_u=m_up(m)
+			-- orientation tracking
+			up=v_normz(v_lerp(up,target_u,0.1))
+			
+			-- pos tracking (without view offset)
+			target_pos=v_lerp(target_pos,pos,0.2)
+
+			-- behind player
+			m=make_m_look_at(up,make_v(target_pos,pos))
+
+			-- shift cam position			
+			pos=v_add(v_add(target_pos,m_fwd(m),-80),up,20)
+
             -- clone matrix
             local m={unpack(m)}		
             -- inverse view matrix
@@ -224,7 +255,16 @@ function make_cam(name)
             -pos[1],-pos[2],-pos[3],1
             })
             self.pos=pos
-        end
+        end,
+		project=function(self,v)
+			-- world to view
+			v=m_x_v(self.m,v)
+			-- too close to cam plane?
+			local z=v[3]
+			if(z<z_near) return
+			-- view to screen
+ 			return {x=64+((v[1]/z)<<6),y=64-((v[2]/z)<<6)}
+		end		
     }
 end
 
@@ -251,6 +291,39 @@ function z_poly_clip(znear,v)
 		end
 		v0=v1
 		d0=d1
+	end
+	return res
+end
+
+-- sutherland-hodgman clipping
+function plane_poly_clip(n,p,v)
+	local dist,allin={},true
+	for i=1,#v do
+		dist[i]=v_dot(make_v(v[i],p),n)
+		allin = allin and dist[i]>0
+	end
+	-- early exit
+	if(allin) return v
+	
+	local res={}
+	local v0,d0=v[#v],dist[#v]
+	for i=1,#v do
+		local v1,d1=v[i],dist[i]
+		if d1>0 then
+			if d0<=0 then
+				local nv=v_lerp(v0,v1,d0/(d0-d1)) 
+				nv.x=64+((nv[1]/nv[3])<<6)
+				nv.y=64-((nv[2]/nv[3])<<6)
+				res[#res+1]=nv
+			end
+			res[#res+1]=v1
+		elseif d0>0 then
+			local nv=v_lerp(v0,v1,d0/(d0-d1)) 
+			nv.x=64+((nv[1]/nv[3])<<6)
+			nv.y=64-((nv[2]/nv[3])<<6)
+			res[#res+1]=nv
+		end
+		v0,d0=v1,d1
 	end
 	return res
 end
@@ -353,6 +426,62 @@ function draw_faces(faces)
 	end
 end
 
+local sky_gradient={0x77,0xc7,0xc6,0xcc}
+local sky_fillp={0xffff,0xa5a5,0xa5a5,0xffff}
+function draw_ground()
+	cls(3)
+	
+	-- draw horizon
+	local zfar=-256
+	local farplane={
+			{-zfar,zfar,zfar},
+			{-zfar,-zfar,zfar},
+			{zfar,-zfar,zfar},
+			{zfar,zfar,zfar}}
+
+	-- ground normal in cam space
+	local n=m_up(_cam.m)
+
+	for k=0,#sky_gradient-1 do
+		-- ground location in cam space	
+		local p=m_x_v(_cam.m,{0,_cam.pos[2]-10*k*k,0})
+		local sky=plane_poly_clip(n,p,farplane)
+		for _,v in pairs(sky) do
+			v.x=64+((v[1]/v[3])<<6)
+			v.y=64-((v[2]/v[3])<<6)
+		end
+		fillp(sky_fillp[k+1])		
+		polyfill(sky,sky_gradient[k+1])
+	end
+
+	-- sun
+	fillp(0xa5a5)
+	local sun_pos=_cam:project({_cam.pos[1],_cam.pos[2]+64,_cam.pos[3]-64})
+	if sun_pos then
+		circfill(sun_pos.x,sun_pos.y,7+rnd(2),0xc7)
+		circfill(sun_pos.x,sun_pos.y,5,0x7a)
+	end
+	fillp()
+
+	local cy=_cam.pos[2]
+
+	local scale=4*max(flr(cy/32+0.5),1)
+	scale*=scale
+	local x0,z0=_cam.pos[1],_cam.pos[3]
+	local dx,dy=x0%scale,z0%scale
+	
+	for i=-4,4 do
+		local ii=scale*i-dx+x0
+		for j=-4,4 do
+			local jj=scale*j-dy+z0
+			local dot_pos=_cam:project({ii,0,jj})
+			if dot_pos then
+				pset(dot_pos.x,dot_pos.y,1)
+			end
+ 		end
+	end
+end
+
 -->8
 -- update & main loop
 function _init()
@@ -378,18 +507,27 @@ function _init()
     _cam=make_cam("main")
 end
 
+_player_angle=0
+_player_da=0
+_player_ttl=0
+_player_pos={0,60,0}
 function _update()
-    local m=make_m_from_euler(0,time()/8,0)
-	local pos=v_add({0,20,0},m_fwd(m),-80)
-    _cam:track(pos,m)
+	_player_angle+=_player_da
+	_player_ttl-=1
+	if(_player_ttl<0) _player_ttl=10+rnd(15) _player_da=(1-rnd(2))/64
+	
+	_player_orient=make_m_from_euler(0,cos(time()/16),_player_angle)
+	_player_pos=v_add(_player_pos,m_fwd(_player_orient),-8)
+	m_set_pos(_player_orient,_player_pos)
+
+    _cam:track(_player_pos,_player_orient)
 end
 
 function _draw()
-    cls(12)
+    draw_ground()
 
-    local m=make_m_from_euler(0,0,time()/16)
     local out={}
-    collect_faces(_models["bf109"],m,out)
+    collect_faces(_models["bf109"],_player_orient,out)
 	sort(out)
 
 	-- dithered fill mode

@@ -13,152 +13,7 @@ local k_far,k_near=0,2
 local k_right,k_left=4,8
 local z_near=8
 
-
--- maths & cam
-function lerp(a,b,t)
-	return a*(1-t)+b*t
-end
-
-function make_v(a,b)
-	return {
-		b[1]-a[1],
-		b[2]-a[2],
-		b[3]-a[3]}
-end
-function v_clone(v)
-	return {v[1],v[2],v[3]}
-end
-function v_dot(a,b)
-	return a[1]*b[1]+a[2]*b[2]+a[3]*b[3]
-end
-function v_scale(v,scale)
-	v[1]*=scale
-	v[2]*=scale
-	v[3]*=scale
-end
-function v_add(v,dv,scale)
-	scale=scale or 1
-	return {
-		v[1]+scale*dv[1],
-		v[2]+scale*dv[2],
-		v[3]+scale*dv[3]}
-end
-function v_lerp(a,b,t)
-	return {
-		lerp(a[1],b[1],t),
-		lerp(a[2],b[2],t),
-		lerp(a[3],b[3],t)
-	}
-end
-function v2_lerp(a,b,t)
-	return {
-		lerp(a[1],b[1],t),
-		lerp(a[2],b[2],t)
-	}
-end
-
-function v_cross(a,b)
-	local ax,ay,az=a[1],a[2],a[3]
-	local bx,by,bz=b[1],b[2],b[3]
-	return {ay*bz-az*by,az*bx-ax*bz,ax*by-ay*bx}
-end
--- safe for overflow (to some extent)
-function v_len(v)
-	local x,y,z=v[1],v[2],v[3]
-  -- pick major
-  local d=max(max(abs(x),abs(y)),abs(z))
-  -- adjust
-  x/=d
-  y/=d
-  z/=d
-  -- actuel len
-  return sqrt(x*x+y*y+z*z)*d
-end
-
-function v_normz(v)
-	local x,y,z=v[1],v[2],v[3]
-  local d=v_len(v)
-	return {x/d,y/d,z/d},d
-end
-
--- matrix functions
-local _m_unit={
-	1,0,0,0,
-	0,1,0,0,
-	0,0,1,0,
-	0,0,0,0}
-function make_m_from_euler(x,y,z)
-		local a,b = cos(x),-sin(x)
-		local c,d = cos(y),-sin(y)
-		local e,f = cos(z),-sin(z)
-  
-    -- yxz order
-  local ce,cf,de,df=c*e,c*f,d*e,d*f
-	 return {
-	  ce+df*b,a*f,cf*b-de,0,
-	  de*b-cf,a*e,df+ce*b,0,
-	  a*d,-b,a*c,0,
-	  0,0,0,1}
-end
-
-function m_set_pos(m,v)
-	m[13]=v[1]
-	m[14]=v[2]
-	m[15]=v[3]
-end
-
-function m_x_v(m,v)
-	local x,y,z=v[1],v[2],v[3]
-	return {m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]}
-end
-
--- inline matrix vector multiply invert
--- inc. position
-function m_inv_x_v(m,v)
-	local x,y,z=v[1]-m[13],v[2]-m[14],v[3]-m[15]
-	return {m[1]*x+m[2]*y+m[3]*z,m[5]*x+m[6]*y+m[7]*z,m[9]*x+m[10]*y+m[11]*z}
-end
--- inline matrix vector multiply invert
--- excl. position
-function m_inv_x_n(m,v)
-	local x,y,z=v[1],v[2],v[3]
-	return {m[1]*x+m[2]*y+m[3]*z,m[5]*x+m[6]*y+m[7]*z,m[9]*x+m[10]*y+m[11]*z}
-end
-
--- returns basis vectors from matrix
-function m_right(m)
-	return {m[1],m[2],m[3]}
-end
-function m_up(m)
-	return {m[5],m[6],m[7]}
-end
-function m_fwd(m)
-	return {m[9],m[10],m[11]}
-end
--- optimized 4x4 matrix mulitply
-function m_x_m(a,b)
-	local a11,a12,a13,a21,a22,a23,a31,a32,a33=a[1],a[5],a[9],a[2],a[6],a[10],a[3],a[7],a[11]
-	local b11,b12,b13,b14,b21,b22,b23,b24,b31,b32,b33,b34=b[1],b[5],b[9],b[13],b[2],b[6],b[10],b[14],b[3],b[7],b[11],b[15]
-
-	return {
-			a11*b11+a12*b21+a13*b31,a21*b11+a22*b21+a23*b31,a31*b11+a32*b21+a33*b31,0,
-			a11*b12+a12*b22+a13*b32,a21*b12+a22*b22+a23*b32,a31*b12+a32*b22+a33*b32,0,
-			a11*b13+a12*b23+a13*b33,a21*b13+a22*b23+a23*b33,a31*b13+a32*b23+a33*b33,0,
-			a11*b14+a12*b24+a13*b34+a[13],a21*b14+a22*b24+a23*b34+a[14],a31*b14+a32*b24+a33*b34+a[15],1
-		}
-end
-
-function make_m_from_v_angle(up,angle)
-	local fwd={-sin(angle),0,cos(angle)}
-	local right=v_normz(v_cross(up,fwd))
-	fwd=v_cross(right,up)
-	return {
-		right[1],right[2],right[3],0,
-		up[1],up[2],up[3],0,
-		fwd[1],fwd[2],fwd[3],0,
-		0,0,0,1
-	}
-end
+#include math.lua
 
 function make_m_look_at(up,fwd)
 	local right=v_normz(v_cross(up,fwd))
@@ -173,17 +28,17 @@ end
 
 -- sort
 -- https://github.com/morgan3d/misc/tree/master/p8sort
--- 
+--
 function sort(data)
-	local n = #data 
+	local n = #data
 	if(n<2) return
-	
+
 	-- form a max heap
 	for i = n\2+1, 1, -1 do
 	 -- m is the index of the max child
 	 local parent, value, m = i, data[i], i + i
-	 local key = value.key 
-	 
+	 local key = value.key
+
 	 while m <= n do
 	  -- find the max child
 	  if ((m < n) and (data[m + 1].key > data[m].key)) m += 1
@@ -194,8 +49,8 @@ function sort(data)
 	  m += m
 	 end
 	 data[parent] = value
-	end 
-   
+	end
+
 	-- read out the values,
 	-- restoring the heap property
 	-- after each step
@@ -203,11 +58,11 @@ function sort(data)
 	 -- swap root with last
 	 local value = data[i]
 	 data[i], data[1] = data[1], value
-   
+
 	 -- restore the heap
 	 local parent, terminate, m = 1, i - 1, 2
-	 local key = value.key 
-	 
+	 local key = value.key
+
 	 while m <= terminate do
 	  local mval = data[m]
 	  local mkey = mval.key
@@ -220,8 +75,8 @@ function sort(data)
 	  data[parent] = mval
 	  parent = m
 	  m += m
-	 end  
-	 
+	 end
+
 	 data[parent] = value
 	end
 end
@@ -232,23 +87,23 @@ end
 function make_cam(name)
 	local up,target_pos={0,1,0},{0,0,0}
     return {
-	    pos=pos,    
+	    pos=pos,
 		track=function(self,pos,m)
 			local target_u=m_up(m)
 			-- orientation tracking
 			up=v_normz(v_lerp(up,target_u,0.2))
-			
+
 			-- pos tracking (without view offset)
 			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-60),0.05)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
 
-			-- shift cam position			
+			-- shift cam position
 			pos=v_add(target_pos,up,30)
 
             -- clone matrix
-            local m={unpack(m)}		
+            local m={unpack(m)}
             -- inverse view matrix
             m[2],m[5]=m[5],m[2]
             m[3],m[9]=m[9],m[3]
@@ -270,7 +125,7 @@ function make_cam(name)
 			if(z<z_near) return
 			-- view to screen
  			return {x=64+((v[1]/z)<<6),y=64-((v[2]/z)<<6)}
-		end		
+		end
     }
 end
 
@@ -283,14 +138,14 @@ function z_poly_clip(znear,v)
 		local d1=v1[3]-znear
 		if d1>0 then
 			if d0<=0 then
-				local nv=v_lerp(v0,v1,d0/(d0-d1)) 
+				local nv=v_lerp(v0,v1,d0/(d0-d1))
 				nv.x=64+((nv[1]/nv[3])<<6)
 				nv.y=64-((nv[2]/nv[3])<<6)
 				res[#res+1]=nv
 			end
 			res[#res+1]=v1
 		elseif d0>0 then
-			local nv=v_lerp(v0,v1,d0/(d0-d1)) 
+			local nv=v_lerp(v0,v1,d0/(d0-d1))
 			nv.x=64+((nv[1]/nv[3])<<6)
 			nv.y=64-((nv[2]/nv[3])<<6)
 			res[#res+1]=nv
@@ -310,21 +165,21 @@ function plane_poly_clip(n,p,v)
 	end
 	-- early exit
 	if(allin) return v
-	
+
 	local res={}
 	local v0,d0=v[#v],dist[#v]
 	for i=1,#v do
 		local v1,d1=v[i],dist[i]
 		if d1>0 then
 			if d0<=0 then
-				local nv=v_lerp(v0,v1,d0/(d0-d1)) 
+				local nv=v_lerp(v0,v1,d0/(d0-d1))
 				nv.x=64+((nv[1]/nv[3])<<6)
 				nv.y=64-((nv[2]/nv[3])<<6)
 				res[#res+1]=nv
 			end
 			res[#res+1]=v1
 		elseif d0>0 then
-			local nv=v_lerp(v0,v1,d0/(d0-d1)) 
+			local nv=v_lerp(v0,v1,d0/(d0-d1))
 			nv.x=64+((nv[1]/nv[3])<<6)
 			nv.y=64-((nv[2]/nv[3])<<6)
 			res[#res+1]=nv
@@ -340,10 +195,10 @@ end
 local v_cache_cls={
 	-- v is vertex reference
 	__index=function(t,v)
-		-- inline: local a=m_x_v(t.m,t.v[k]) 
+		-- inline: local a=m_x_v(t.m,t.v[k])
 		local m,x,y,z=t.m,v[1],v[2],v[3]
 		local ax,ay,az=m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]
-	
+
 		local outcode=k_near
 		if(az>z_near) outcode=k_far
 		if(ax>az) outcode+=k_right
@@ -354,7 +209,7 @@ local v_cache_cls={
 		-- assert(bo==outcode,"outcode:"..outcode.." bits:"..bo)
 
 		-- assume vertex is visible, compute 2d coords
-		local a={ax,ay,az,outcode=outcode,clipcode=outcode&2,x=64+((ax/az)<<6),y=64-((ay/az)<<6)} 
+		local a={ax,ay,az,outcode=outcode,clipcode=outcode&2,x=64+((ax/az)<<6),y=64-((ay/az)<<6)}
 		t[v]=a
 		return a
 	end
@@ -363,12 +218,12 @@ local v_cache_cls={
 function collect_faces(model,m,out)
 	-- cam pos in object space
 	local cam_pos=m_inv_x_v(m,_cam.pos)
-	-- sun vector in model space	
+	-- sun vector in model space
 	local sun=m_inv_x_n(m,_sun_dir)
-	
+
 	-- select lod
 	local d=v_dot(cam_pos,cam_pos)
-	
+
 	-- lod selection
 	local lodid=0
 	for i=1,#model.lods do
@@ -389,7 +244,7 @@ function collect_faces(model,m,out)
 		if face.dual_sided or v_dot(face.n,cam_pos)>face.cp then
 			-- project vertices
 			local v4=face[4]
-			local v0,v1,v2,v3=v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4]			
+			local v0,v1,v2,v3=v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4]
 			-- mix of near/far verts?
 			if v0.outcode&v1.outcode&v2.outcode&(v3 and v3.outcode or 0xffff)==0 then
 				local verts={v0,v1,v2,v3}
@@ -454,7 +309,7 @@ local sky_gradient={0x77,0xc7,0xc6,0xcc}
 local sky_fillp={0xffff,0xa5a5,0xa5a5,0xffff}
 function draw_ground()
 	cls(3)
-	
+
 	-- draw horizon
 	local zfar=-256
 	local farplane={
@@ -467,14 +322,14 @@ function draw_ground()
 	local n=m_up(_cam.m)
 
 	for k=0,#sky_gradient-1 do
-		-- ground location in cam space	
+		-- ground location in cam space
 		local p=m_x_v(_cam.m,{0,_cam.pos[2]-10*k*k,0})
 		local sky=plane_poly_clip(n,p,farplane)
 		for _,v in pairs(sky) do
 			v.x=64+((v[1]/v[3])<<6)
 			v.y=64-((v[2]/v[3])<<6)
 		end
-		fillp(sky_fillp[k+1])		
+		fillp(sky_fillp[k+1])
 		polyfill(sky,sky_gradient[k+1])
 	end
 
@@ -493,7 +348,7 @@ function draw_ground()
 	scale*=scale
 	local x0,z0=_cam.pos[1],_cam.pos[3]
 	local dx,dy=x0%scale,z0%scale
-	
+
 	for i=-4,4 do
 		local ii=scale*i-dx+x0
 		for j=-4,4 do
@@ -521,7 +376,7 @@ function make_player_controller()
 			if(btn(0)) droll=1
 			if(btn(1)) droll=-1
 			if(btn(2)) dpitch=1
-			if(btn(3)) dpitch=-1			
+			if(btn(3)) dpitch=-1
 			return dpow,droll,dpitch
 		end
 	}
@@ -546,8 +401,8 @@ function make_plane(model,pos,ctrl)
 		update=function(self)
 			time_t+=1
 			local dpow,droll,dpitch=ctrl:update()
-			
-			-- damping			
+
+			-- damping
 			roll*=0.8
 			pitch*=0.8
 
@@ -571,7 +426,7 @@ function make_plane(model,pos,ctrl)
 			-- lift?
 			local vn,vlen=v_normz(velocity)
 			self.vlen=vlen
-			
+
 			local lift=vlen*vlen*(1-v_dot(vn,fwd)/2)
 			self.lift=lift
 			local antilift=v_dot(up,vn)
@@ -602,7 +457,7 @@ function make_plane(model,pos,ctrl)
 			self.m=m_x_m(self.m,make_m_from_euler(pitch,yaw,roll))
 			m_set_pos(self.m,self.pos)
 			forces={0,0,0}
-		end		
+		end
 	}
 end
 
@@ -714,7 +569,7 @@ function unpack_models(ramps)
             unpack_array(function()
                 add(verts,{unpack_double(scale),unpack_double(scale),unpack_double(scale)})
             end)
-			local function unpack_face()			
+			local function unpack_face()
                 local flags,f=mpeek(),{ramp=ramps[mpeek()]}
 				-- animation frame?
 				if(flags&0x10!=0) f.frame=mpeek()
@@ -744,7 +599,7 @@ function unpack_models(ramps)
 			end
 
             -- faces
-            unpack_array(function()				
+            unpack_array(function()
 				local f=add(lod.f,unpack_face())
                 -- normal
                 f.n={unpack_double(),unpack_double(),unpack_double()}

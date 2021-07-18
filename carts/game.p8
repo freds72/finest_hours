@@ -527,6 +527,18 @@ function make_player_controller()
 	}
 end
 
+function make_level_controller()
+	return {
+		init=function()
+			-- power: 80
+			return 80
+		end,
+		update=function(self)
+			return 0,0,0
+		end
+	}
+end
+
 -- make a plane "physic object"
 function make_plane(model,pos,ctrl)
 	local time_t=0
@@ -630,7 +642,12 @@ function _init()
     decompress(0x8000,unpack_models,ramps)
 
     _cam=make_cam("main")
-	_plyr=make_plane("bf109",{0,60,0},make_player_controller(0))
+	
+	_plyr=make_plane("bf109",{0,60,0},make_player_controller())
+	_things={}
+	add(_things, _plyr)
+	add(_things,make_plane("bf109",{-45,60,25},make_level_controller()))
+	add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
 
 	_props={}
 	for i=1,5 do
@@ -643,7 +660,9 @@ function _init()
 end
 
 function _update()
-	_plyr:update()
+	for _,thing in pairs(_things) do
+		thing:update()
+	end
 
     _cam:track(_plyr.pos,_plyr.m)
 	_tick+=1
@@ -653,7 +672,9 @@ function _draw()
     draw_ground()
 
     local out={}
-    collect_faces(_plyr.model,_plyr.m,out)
+	for _,thing in pairs(_things) do
+		collect_faces(thing.model,thing.m,out)
+	end
 
 	for _,prop in pairs(_props) do
     	collect_faces(prop.model,prop.m,out)

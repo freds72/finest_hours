@@ -507,15 +507,36 @@ function draw_ground()
 end
 
 -->8
--- player
-function make_player(pos)
+-- player controller (reads input from controller)
+function make_player_controller()
+	return {
+		init=function()
+			-- power: 80
+			return 80
+		end,
+		update=function(self)
+			local dpow,droll,dpitch=0,0,0
+			if(btn(4)) dpow=1
+			if(btn(5)) dpow=-1
+			if(btn(0)) droll=1
+			if(btn(1)) droll=-1
+			if(btn(2)) dpitch=1
+			if(btn(3)) dpitch=-1			
+			return dpow,droll,dpitch
+		end
+	}
+end
+
+-- make a plane "physic object"
+function make_plane(model,pos,ctrl)
 	local time_t=0
 	local roll,pitch=0,0
 	local yaw,dyaw=0,0
-	local power,rpm=0,0
+	local power,rpm=ctrl:init(),0
 	local forces,velocity,angularv={0,0,0},{0,0,0},{0,0,0}
 
 	return {
+		model=_models[model],
 		pos=v_clone(pos),
 		m=make_m_from_euler(0,0,0),
 		apply_force=function(self,v,scale)
@@ -524,29 +545,28 @@ function make_player(pos)
 		end,
 		update=function(self)
 			time_t+=1
-			local dpow,dy,dp,dr=0,0,0,0
-			if(btn(4)) dpow=1
-			if(btn(5)) dpow=-1
-			if(btn(0)) dr=1
-			if(btn(1)) dr=-1
-			if(btn(2)) dp=1
-			if(btn(3)) dp=-1			
+			local dpow,droll,dpitch=ctrl:update()
 			
+			-- damping			
+			roll*=0.8
+			pitch*=0.8
+
+			-- controls
+			roll+=droll/1024
+			pitch+=dpitch/2048
+
+			-- current orientation
 			local fwd,up,right=m_fwd(self.m),m_up(self.m),m_right(self.m)
 
 			-- gravity
 			self:apply_force({0,-1,0})
 
 			-- power --> rpm
-			power=mid(power+dpow/4,0,100)			
+			power=mid(power+dpow/4,0,100)
+			-- engine "delay"
 			rpm=lerp(rpm,power,0.6)
+			-- engine max force
 			self:apply_force(fwd,rpm/64)
-
-			-- controls
-			roll*=0.8
-			roll+=dr/1024
-			pitch*=0.8
-			pitch+=dp/2048
 
 			-- lift?
 			local vn,vlen=v_normz(velocity)
@@ -573,6 +593,7 @@ function make_player(pos)
 			-- move
 			self.pos=v_add(self.pos,velocity)
 
+			-- todo: boom!
 			if self.pos[2]<0 then
 				self.pos[2]=0
 				velocity[2]=0
@@ -609,7 +630,7 @@ function _init()
     decompress(0x8000,unpack_models,ramps)
 
     _cam=make_cam("main")
-	_plyr=make_player({0,60,0})
+	_plyr=make_plane("bf109",{0,60,0},make_player_controller(0))
 
 	_props={}
 	for i=1,5 do
@@ -632,7 +653,7 @@ function _draw()
     draw_ground()
 
     local out={}
-    collect_faces(_models["bf109"],_plyr.m,out)
+    collect_faces(_plyr.model,_plyr.m,out)
 
 	for _,prop in pairs(_props) do
     	collect_faces(prop.model,prop.m,out)

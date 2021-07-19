@@ -418,11 +418,11 @@ function make_level_controller()
 	return {
 		init=function()
 			-- power: 80
-			return 80
+			return 90
 		end,
 		update=function(self)
 			local fwd=m_fwd(self.body.m)
-			if(fwd[2]<0.1) return 0,0,-1
+			if(fwd[2]<0.1) return 0,0,-0.2
 			return 0,0,0
 		end
 	}
@@ -490,7 +490,8 @@ function make_plane(model,pos,ctrl)
 
 			-- integrate
 			velocity=v_add(velocity,forces,0.5)
-
+			-- publish
+			self.velocity=velocity
 			-- move
 			self.pos=v_add(self.pos,velocity)
 
@@ -599,9 +600,9 @@ function update_particles()
 					for _,thing in pairs(_things) do
 						-- todo: skip bullet owner
 						if thing!=p.owner and thing.model.hulls then
-							if v_len(make_v(p.pos,thing.pos))<16 then
+							if v_len(make_v(p.pos,thing.pos))<128 then
 								hit,hitn=hitscan(thing.m,thing.model.hulls,p.pos,p.prev_pos)
-								if(hit) printh("hit") break
+								if(hit) printh("hit") hitn=v_add(hitn,thing.velocity) break
 							end
 						end
 					end
@@ -625,7 +626,7 @@ function draw_bullets()
 				local v1=_cam:project(p.prev_pos)
 				if(v1) line(v0.x,v0.y,v1.x,v1.y,9)
 			elseif p.type==2 then
-				pset(v0.x,v0.y,10)
+				circfill(v0.x,v0.y,1,10)
 			end
 		end
 	end
@@ -657,8 +658,8 @@ function _init()
 	
 	_things={}
 	_plyr=add(_things, make_plane("bf109",{0,60,0},make_player_controller()))
-	add(_things,make_plane("bf109",{-25,60,25},make_level_controller()))
-	add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
+	add(_things,make_plane("bf109",{-10,60,25},make_level_controller()))
+	add(_things,make_plane("bf109",{20,70,10},make_level_controller()))
 
 	_props={}
 	for i=1,0 do

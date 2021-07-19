@@ -17,9 +17,10 @@ function v_dot(a,b)
 	return a[1]*b[1]+a[2]*b[2]+a[3]*b[3]
 end
 function v_scale(v,scale)
-	v[1]*=scale
-	v[2]*=scale
-	v[3]*=scale
+	return {
+		v[1]*scale,
+		v[2]*scale,
+		v[3]*scale}
 end
 function v_add(v,dv,scale)
 	scale=scale or 1
@@ -140,10 +141,14 @@ function m_x_m(a,b)
 	}
 end
 
-
 -- optimized matrix x vector multiply
 function m_x_v(m,v)
 	local x,y,z=v[1],v[2],v[3]
 	return {m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]}
+end
+
+function m_x_n(m,v)
+	local x,y,z=v[1],v[2],v[3]
+	return {m[1]*x+m[5]*y+m[9]*z,m[2]*x+m[6]*y+m[10]*z,m[3]*x+m[7]*y+m[11]*z}
 end
 

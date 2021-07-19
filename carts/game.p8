@@ -7,11 +7,12 @@ __lua__
 
 -- globals
 local _models,_sun_dir,_cam,_plyr={},{0,-0.707,0.707}
+local _particles={}
 local _tick=0
 
 local k_far,k_near=0,2
 local k_right,k_left=4,8
-local z_near=8
+local z_near=1
 
 #include math.lua
 
@@ -86,24 +87,34 @@ end
 -- tracking camera
 function make_cam(name)
 	local up,target_pos={0,1,0},{0,0,0}
+	-- cam track position
+	local mode,modes=1,{
+		{0.1,-8,0.2},
+		{1,-1,1}
+	}
+	local up_lag,back_dist,back_lag=unpack(modes[1])	
     return {
 	    pos=pos,
+		mode=function(self,m)
+			up_lag,back_dist,back_lag=unpack(modes[m])
+		end,
 		track=function(self,pos,m)
-			local target_u=m_up(m)
+			local target_u,pos=m_up(m),v_clone(pos)
 			-- orientation tracking
-			up=v_normz(v_lerp(up,target_u,0.2))
-
+			up=v_normz(v_lerp(up,target_u,up_lag))
+			
 			-- pos tracking (without view offset)
-			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-60),0.05)
+			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),back_dist),back_lag)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
 
-			-- shift cam position
-			pos=v_add(target_pos,up,30)
+			-- shift cam position			
+			pos=v_add(target_pos,up,3)
 
             -- clone matrix
             local m={unpack(m)}
+
             -- inverse view matrix
             m[2],m[5]=m[5],m[2]
             m[3],m[9]=m[9],m[3]
@@ -116,7 +127,7 @@ function make_cam(name)
             -pos[1],-pos[2],-pos[3],1
             })
             self.pos=pos
-        end,
+        end,			
 		project=function(self,v)
 			-- world to view
 			v=m_x_v(self.m,v)
@@ -308,7 +319,7 @@ end
 local sky_gradient={0x77,0xc7,0xc6,0xcc}
 local sky_fillp={0xffff,0xa5a5,0xa5a5,0xffff}
 function draw_ground()
-	cls(3)
+	cls(13)
 
 	-- draw horizon
 	local zfar=-256
@@ -364,12 +375,20 @@ end
 -->8
 -- player controller (reads input from controller)
 function make_player_controller()
+	local gun,gunmode_ttl=0,0
 	return {
 		init=function()
 			-- power: 80
 			return 80
 		end,
 		update=function(self)
+			if gunmode_ttl>0 then
+				-- 
+				gunmode_ttl-=1
+				_cam:mode(2)
+			else
+				_cam:mode(1)
+			end
 			local dpow,droll,dpitch=0,0,0
 			if(btn(4)) dpow=1
 			if(btn(5)) dpow=-1
@@ -377,6 +396,19 @@ function make_player_controller()
 			if(btn(1)) droll=-1
 			if(btn(2)) dpitch=1
 			if(btn(3)) dpitch=-1
+
+			-- fire control
+			if btnp(5) then
+				gunmode_ttl=30
+				-- world position
+				gun+=1
+				local anchor=self.body.model.anchors[gun%2]
+				make_bullet(
+					m_x_v(self.body.m,anchor.pos),
+					m_x_n(self.body.m,anchor.n),
+					self.body
+				)
+			end
 			return dpow,droll,dpitch
 		end
 	}
@@ -389,6 +421,8 @@ function make_level_controller()
 			return 80
 		end,
 		update=function(self)
+			local fwd=m_fwd(self.body.m)
+			if(fwd[2]<0.1) return 0,0,-1
 			return 0,0,0
 		end
 	}
@@ -402,7 +436,7 @@ function make_plane(model,pos,ctrl)
 	local power,rpm=ctrl:init(),0
 	local forces,velocity,angularv={0,0,0},{0,0,0},{0,0,0}
 
-	return {
+	local body={
 		model=_models[model],
 		pos=v_clone(pos),
 		m=make_m_from_euler(0,0,0),
@@ -455,7 +489,7 @@ function make_plane(model,pos,ctrl)
 			yaw=-drag
 
 			-- integrate
-			velocity=v_add(velocity,forces)
+			velocity=v_add(velocity,forces,0.5)
 
 			-- move
 			self.pos=v_add(self.pos,velocity)
@@ -466,13 +500,136 @@ function make_plane(model,pos,ctrl)
 				velocity[2]=0
 			end
 
+			-- todo: normalize after a while...
 			self.m=m_x_m(self.m,make_m_from_euler(pitch,yaw,roll))
 			m_set_pos(self.m,self.pos)
 			forces={0,0,0}
 		end
 	}
+	ctrl.body=body
+	return body
 end
 
+-->8
+-- weapons & particles
+function make_bullet(pos,f,owner)
+	return add(_particles,{
+		owner=owner,
+		pos=pos,
+		f=v_scale(f,15+rnd()),
+		ttl=25+rnd(15),
+		type=1})
+end
+function make_particle(pos,f)
+	return add(_particles,{
+		pos=pos,
+		f=f,
+		ttl=15+rnd(5),
+		type=2
+	})
+end
+
+function hitscan(m,hulls,a,b)
+	-- convert bullet into object space
+	local aa,bb=m_inv_x_v(m,a),m_inv_x_v(m,b)
+	-- use local space for distance check
+	local dir,closest_hit,closest_t=make_v(aa,bb)
+	for id,planes in pairs(hulls) do
+		-- reset starting points for the next convex space
+		local p0,p1,hit=aa,bb
+		for _,plane in pairs(planes) do
+			local plane_dist=plane[4]
+			local dist,otherdist=v_dot(plane,p0),v_dot(plane,p1)
+			local side,otherside=dist>plane_dist,otherdist>plane_dist
+			-- outside of convex space
+			if(side and otherside) hit=nil break
+			-- crossing a plane
+			local t=dist-plane_dist
+			if t<0 then
+				t-=0x0.01
+			else
+				t+=0x0.01
+			end  
+			-- cliping fraction
+			local frac=t/(dist-otherdist)
+			if frac>0 and frac<1 then
+				if side then
+					-- segment entering
+					p0=v_lerp(p0,p1,frac)
+					hit=p0
+					hit.n=plane
+				else
+					-- segment leaving
+					p1=v_lerp(p0,p1,frac)
+				end
+			end
+		end
+		if hit then
+			-- project hit back on segment to find closest hit
+			local t=v_dot(dir,hit)
+			if closest_hit then
+				if(t<closest_t) closest_hit,closest_t=hit,t
+			else
+				closest_hit,closest_t=hit,t
+			end
+		end
+	end
+	-- convert hit into world space
+	return closest_hit and m_x_v(m,closest_hit),closest_hit and m_x_n(m,closest_hit.n)
+end
+
+function update_particles()
+	for p in all(_particles) do
+		p.ttl-=1
+		if p.ttl<0 then
+			del(_particles,p)
+		else
+			-- todo: yikes, move that to function or whatsnot
+			if p.type==1 then
+				p.prev_pos=p.pos
+				p.pos=v_add(p.pos,p.f)
+				-- hit ground?
+				local hit,hitn
+				if p.pos[2]<0 then
+					--hit,hitn=v_lerp(p.pos,p.prev_pos,p.pos[2]/(p.pos[2]-p.prev_pos[2])),{0,1,0}
+					hit,hitn={p.pos[1],0,p.pos[3]},{0,5+rnd(3),0}
+				end
+				-- hit something?
+				if not hit then
+					for _,thing in pairs(_things) do
+						-- todo: skip bullet owner
+						if thing!=p.owner and thing.model.hulls then
+							if v_len(make_v(p.pos,thing.pos))<16 then
+								hit,hitn=hitscan(thing.m,thing.model.hulls,p.pos,p.prev_pos)
+								if(hit) printh("hit") break
+							end
+						end
+					end
+				end
+				if(hit) make_particle(hit,hitn) del(_particles,p)
+			elseif p.type==2 then
+				-- gravity
+				-- todo: add some mass?
+				p.f=v_add(p.f,{0,-1,0})
+				if(p.pos[2]<0) del(_particles,p)
+			end
+		end
+	end
+end
+
+function draw_bullets()
+	for _,p in pairs(_particles) do
+		local v0=_cam:project(p.pos)
+		if v0 then
+			if p.type==1 then
+				local v1=_cam:project(p.prev_pos)
+				if(v1) line(v0.x,v0.y,v1.x,v1.y,9)
+			elseif p.type==2 then
+				pset(v0.x,v0.y,10)
+			end
+		end
+	end
+end
 
 -->8
 -- update & main loop
@@ -498,15 +655,14 @@ function _init()
 
     _cam=make_cam("main")
 	
-	_plyr=make_plane("bf109",{0,60,0},make_player_controller())
 	_things={}
-	add(_things, _plyr)
-	add(_things,make_plane("bf109",{-45,60,25},make_level_controller()))
+	_plyr=add(_things, make_plane("bf109",{0,60,0},make_player_controller()))
+	add(_things,make_plane("bf109",{-25,60,25},make_level_controller()))
 	add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
 
 	_props={}
-	for i=1,5 do
-		local pos,m={512*cos(i/6),0,512*sin(i/6)},make_m_from_euler(0,rnd(),0)
+	for i=1,0 do
+		local pos,m={128*cos(i/6),0,128*sin(i/6)},make_m_from_euler(0,rnd(),0)
 		m_set_pos(m,pos)
 		add(_props,{
 			model=_models["mountain"],
@@ -518,6 +674,7 @@ function _update()
 	for _,thing in pairs(_things) do
 		thing:update()
 	end
+	update_particles()
 
     _cam:track(_plyr.pos,_plyr.m)
 	_tick+=1
@@ -530,6 +687,8 @@ function _draw()
 	for _,thing in pairs(_things) do
 		collect_faces(thing.model,thing.m,out)
 	end
+
+	draw_bullets()
 
 	for _,prop in pairs(_props) do
     	collect_faces(prop.model,prop.m,out)
@@ -545,6 +704,7 @@ function _draw()
 
 	-- memory
 	-- print(stat(0).."b",2,2,8)
+	print(#_particles,2,2,7)
 end
 
 -->8
@@ -559,7 +719,7 @@ function unpack_variant(force)
 end
 -- unpack a float from 2 bytes
 function unpack_double(scale)
-	local f=(unpack_variant(true)-0x4000)>>4
+	local f=(unpack_variant(true)-0x4000)>>7
 	return f*(scale or 1)
 end
 -- unpack an array of bytes
@@ -578,17 +738,39 @@ function unpack_string()
 	return s
 end
 
+function unpack_vector(scale)
+	return {unpack_double(scale),unpack_double(scale),unpack_double(scale)}
+end
+
 function unpack_models(ramps)
     -- for all models
 	unpack_array(function()
-        local model,name,scale={lods={}},unpack_string(),1
+        local model,name,scale,hulls={lods={},anchors={}},unpack_string(),1
         -- printh("decoding:"..name)
+		-- anchors?
+		unpack_array(function()
+			model.anchors[mpeek()]={
+				pos=unpack_vector(scale),
+				n=unpack_vector()
+			}
+		end)
+		-- collision hull(s)?				
+		unpack_array(function()	
+			hulls=hulls or {}
+			local id,planes=mpeek(),{}
+			unpack_array(function()
+				add(planes,unpack_vector())[4]=unpack_double()
+			end)
+			hulls[id]=planes
+		end)
+		model.hulls=hulls
+
         -- lods
         unpack_array(function()
             local verts,lod={},{f={},dist=unpack_double()}
             -- vertices
             unpack_array(function()
-                add(verts,{unpack_double(scale),unpack_double(scale),unpack_double(scale)})
+                add(verts,unpack_vector(scale))
             end)
 			local function unpack_face()
                 local flags,f=mpeek(),{ramp=ramps[mpeek()]}
@@ -623,7 +805,7 @@ function unpack_models(ramps)
             unpack_array(function()
 				local f=add(lod.f,unpack_face())
                 -- normal
-                f.n={unpack_double(),unpack_double(),unpack_double()}
+                f.n=unpack_vector()
                 -- n.p cache
                 f.cp=v_dot(f.n,f[1])
             end)

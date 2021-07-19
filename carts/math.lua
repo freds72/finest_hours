@@ -140,10 +140,14 @@ function m_x_m(a,b)
 	}
 end
 
-
 -- optimized matrix x vector multiply
 function m_x_v(m,v)
 	local x,y,z=v[1],v[2],v[3]
 	return {m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]}
+end
+
+function m_x_n(m,v)
+	local x,y,z=v[1],v[2],v[3]
+	return {m[1]*x+m[5]*y+m[9]*z,m[2]*x+m[6]*y+m[10]*z,m[3]*x+m[7]*y+m[11]*z}
 end
 

@@ -7,6 +7,7 @@ __lua__
 
 -- globals
 local _models,_sun_dir,_cam,_plyr={},{0,-0.707,0.707}
+local _bullets={}
 local _tick=0
 
 local k_far,k_near=0,2
@@ -94,13 +95,13 @@ function make_cam(name)
 			up=v_normz(v_lerp(up,target_u,0.2))
 
 			-- pos tracking (without view offset)
-			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-60),0.05)
+			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-12),0.05)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
 
 			-- shift cam position
-			pos=v_add(target_pos,up,30)
+			pos=v_add(target_pos,up,5)
 
             -- clone matrix
             local m={unpack(m)}
@@ -117,6 +118,26 @@ function make_cam(name)
             })
             self.pos=pos
         end,
+		track=function(self,pos,m)
+			-- 
+			pos[2]+=15
+			m=make_m_from_euler(0.25,0,0)
+
+            -- clone matrix
+            local m={unpack(m)}
+            -- inverse view matrix
+            m[2],m[5]=m[5],m[2]
+            m[3],m[9]=m[9],m[3]
+            m[7],m[10]=m[10],m[7]
+            --
+            self.m=m_x_m(m,{
+            1,0,0,0,
+            0,1,0,0,
+            0,0,1,0,
+            -pos[1],-pos[2],-pos[3],1
+            })
+            self.pos=pos
+        end,		
 		project=function(self,v)
 			-- world to view
 			v=m_x_v(self.m,v)
@@ -308,7 +329,7 @@ end
 local sky_gradient={0x77,0xc7,0xc6,0xcc}
 local sky_fillp={0xffff,0xa5a5,0xa5a5,0xffff}
 function draw_ground()
-	cls(3)
+	cls(13)
 
 	-- draw horizon
 	local zfar=-256
@@ -364,6 +385,7 @@ end
 -->8
 -- player controller (reads input from controller)
 function make_player_controller()
+	local gun=0
 	return {
 		init=function()
 			-- power: 80
@@ -377,6 +399,17 @@ function make_player_controller()
 			if(btn(1)) droll=-1
 			if(btn(2)) dpitch=1
 			if(btn(3)) dpitch=-1
+
+			-- fire control
+			if btnp(4) then
+				-- world position
+				gun+=1
+				local anchor=self.body.model.anchors[gun%2]
+				make_bullet(
+					m_x_v(self.body.m,anchor.pos),
+					m_x_n(self.body.m,anchor.n)
+				)
+			end
 			return dpow,droll,dpitch
 		end
 	}
@@ -402,7 +435,7 @@ function make_plane(model,pos,ctrl)
 	local power,rpm=ctrl:init(),0
 	local forces,velocity,angularv={0,0,0},{0,0,0},{0,0,0}
 
-	return {
+	local body={
 		model=_models[model],
 		pos=v_clone(pos),
 		m=make_m_from_euler(0,0,0),
@@ -471,8 +504,101 @@ function make_plane(model,pos,ctrl)
 			forces={0,0,0}
 		end
 	}
+	ctrl.body=body
+	return body
 end
 
+-->8
+-- weapons
+function make_bullet(pos,n)
+	add(_bullets,{
+		pos=v_clone(pos),
+		n=n,
+		vel=5+rnd(),
+		ttl=30+rnd(15)
+	})
+end
+
+function hitscan(m,hulls,a,b)
+	local dir,closest_hit,closest_t=make_v(a,b)
+	-- convert bullet into object space
+	local aa,bb=m_inv_x_v(m,a),m_inv_x_v(m,b)
+	for id,planes in pairs(hulls) do
+		-- reset starting points for the next convex space
+		local p0,p1,hit=aa,bb
+		for _,plane in pairs(planes) do
+			local plane_dist=plane[4]
+			local dist,otherdist=v_dot(plane,p0),v_dot(plane,p1)
+			local side,otherside=dist>plane_dist,otherdist>plane_dist
+			-- outside of convex space
+			if(side and otherside) hit=nil break
+			-- crossing a plane
+			local t=dist-plane_dist
+			if t<0 then
+				t-=0x0.01
+			else
+				t+=0x0.01
+			end  
+			-- cliping fraction
+			local frac=t/(dist-otherdist)
+			if frac>0 and frac<1 then
+				if side then
+					-- segment entering
+					p0=v_lerp(p0,p1,frac)
+					hit=m_x_v(m,p0)
+					hit.n=plane
+				else
+					-- segment leaving
+					p1=v_lerp(p0,p1,frac)
+				end
+			end
+		end
+		if hit then
+			-- project hit back on segment to find closest hit
+			local t=v_dot(dir,hit)
+			if closest_hit then
+				if(t<closest_t) closest_hit,closest_t=hit,t
+			else
+				closest_hit,closest_t=hit,t
+			end
+		end
+	end
+	-- convert hit normal into world space
+	return closest_hit,closest_hit and m_x_n(m,closest_hit.n)
+end
+
+function update_bullets()
+	for b in all(_bullets) do
+		b.ttl-=1
+		if b.ttl<0 then
+			del(_bullets,b)
+		else
+			b.prev_pos=b.pos
+			b.pos=v_add(b.pos,b.n,b.vel)
+			-- hit ground?
+			local hit=b.pos[2]<0
+			-- hit something?
+			if not hit then
+				for _,thing in pairs(_things) do
+					-- todo: skip bullet owner
+					if thing.model.hulls then
+					end
+				end
+			end
+			if(hit) del(_bullets,b)
+		end
+	end
+end
+
+function draw_bullets()
+	for _,b in pairs(_bullets) do
+		local v0=_cam:project(b.prev_pos)
+		local v1=_cam:project(b.pos)
+		if v0 and v1 then
+			line(v0.x,v0.y,v1.x,v1.y,9)
+		end
+	end
+end
 
 -->8
 -- update & main loop
@@ -501,11 +627,11 @@ function _init()
 	_plyr=make_plane("bf109",{0,60,0},make_player_controller())
 	_things={}
 	add(_things, _plyr)
-	add(_things,make_plane("bf109",{-45,60,25},make_level_controller()))
-	add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
+	--add(_things,make_plane("bf109",{-45,60,25},make_level_controller()))
+	--add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
 
 	_props={}
-	for i=1,5 do
+	for i=1,0 do
 		local pos,m={512*cos(i/6),0,512*sin(i/6)},make_m_from_euler(0,rnd(),0)
 		m_set_pos(m,pos)
 		add(_props,{
@@ -518,11 +644,17 @@ function _update()
 	for _,thing in pairs(_things) do
 		thing:update()
 	end
+	update_bullets()
 
-    _cam:track(_plyr.pos,_plyr.m)
+	local m=make_m_from_euler(0,0,0)
+	m_set_pos(m,{0,60,0})
+	_plyr.m=m
+
+    _cam:track({0,60,0},make_m_from_euler(0,0.15,0))
 	_tick+=1
 end
 
+local dx,dz=0,0
 function _draw()
     draw_ground()
 
@@ -530,6 +662,8 @@ function _draw()
 	for _,thing in pairs(_things) do
 		collect_faces(thing.model,thing.m,out)
 	end
+
+	draw_bullets()
 
 	for _,prop in pairs(_props) do
     	collect_faces(prop.model,prop.m,out)
@@ -542,6 +676,35 @@ function _draw()
     draw_faces(out)
 
 	fillp()
+
+	-- hitscan test
+	local angle=-time()/16
+	if(btn(0)) dx-=1/8
+	if(btn(1)) dx+=1/8
+	if(btn(2)) dz+=1/8
+	if(btn(3)) dz-=1/8
+	local b0={8*cos(angle)+dx,60,-8*sin(angle)+dz}
+	local b1={8*cos(angle+0.5)+dx,60,-8*sin(angle+0.5)+dz}
+	local v0=_cam:project(b0)
+	local v1=_cam:project(b1)
+	if v0 and v1 then
+		line(v0.x,v0.y,v1.x,v1.y,6)
+		print("a",v0.x,v0.y-2,7)
+		print("b",v1.x,v1.y-2,7)
+	end
+	local hit,hit_n=hitscan(_plyr.m,_plyr.model.hulls,b0,b1,out)
+	if hit then
+		v0=_cam:project(hit)
+		if v0 then
+			circfill(v0.x,v0.y,1,8)
+		end
+		-- draw normal
+		local tip=v_add(hit,hit_n,3)
+		v1=_cam:project(tip)
+		if v0 and v1 then
+			line(v0.x,v0.y,v1.x,v1.y,2)
+		end
+	end
 
 	-- memory
 	-- print(stat(0).."b",2,2,8)
@@ -559,7 +722,7 @@ function unpack_variant(force)
 end
 -- unpack a float from 2 bytes
 function unpack_double(scale)
-	local f=(unpack_variant(true)-0x4000)>>4
+	local f=(unpack_variant(true)-0x4000)>>7
 	return f*(scale or 1)
 end
 -- unpack an array of bytes
@@ -578,17 +741,39 @@ function unpack_string()
 	return s
 end
 
+function unpack_vector(scale)
+	return {unpack_double(scale),unpack_double(scale),unpack_double(scale)}
+end
+
 function unpack_models(ramps)
     -- for all models
 	unpack_array(function()
-        local model,name,scale={lods={}},unpack_string(),1
+        local model,name,scale,hulls={lods={},anchors={}},unpack_string(),1
         -- printh("decoding:"..name)
+		-- anchors?
+		unpack_array(function()
+			model.anchors[mpeek()]={
+				pos=unpack_vector(scale),
+				n=unpack_vector()
+			}
+		end)
+		-- collision hull(s)?				
+		unpack_array(function()	
+			hulls=hulls or {}
+			local id,planes=mpeek(),{}
+			unpack_array(function()
+				add(planes,unpack_vector())[4]=unpack_double()
+			end)
+			hulls[id]=planes
+		end)
+		model.hulls=hulls
+
         -- lods
         unpack_array(function()
             local verts,lod={},{f={},dist=unpack_double()}
             -- vertices
             unpack_array(function()
-                add(verts,{unpack_double(scale),unpack_double(scale),unpack_double(scale)})
+                add(verts,unpack_vector(scale))
             end)
 			local function unpack_face()
                 local flags,f=mpeek(),{ramp=ramps[mpeek()]}
@@ -623,7 +808,7 @@ function unpack_models(ramps)
             unpack_array(function()
 				local f=add(lod.f,unpack_face())
                 -- normal
-                f.n={unpack_double(),unpack_double(),unpack_double()}
+                f.n=unpack_vector()
                 -- n.p cache
                 f.cp=v_dot(f.n,f[1])
             end)

@@ -203,8 +203,8 @@ def export_layer(layer):
     # data
     s = ""
     
-    # pick first object
-    obcontext = [o for o in layer.objects if o.type == 'MESH'][0]
+    # pick object named "model"
+    obcontext = [o for o in layer.objects if o.name == 'model'][0]
     obdata = obcontext.data
     bm = bmesh.new()
     bm.from_mesh(obdata)
@@ -268,6 +268,36 @@ def export_layer(layer):
 
 # model data
 s = ""
+
+# misc model data
+# anchor positions (if any)
+anchor_re = re.compile(r"anchor:([0-9]+)")
+anchors = {o:anchor_re.match(o.name) for o in scene.objects if o.type == 'EMPTY' and anchor_re.match(o.name)}
+s += pack_variant(len(anchors))
+for anchor,result in anchors.items():
+    # anchor id
+    s += pack_byte(int(result.groups()[0]))
+    # anchor location
+    s += pack_vector(anchor.location)
+    # anchor direction (y axis)
+    s += pack_vector(anchor.matrix_world[1])
+
+# collision jull
+hull_re = re.compile(r"hull:([0-9]+)")
+hulls = {o:hull_re.match(o.name) for o in scene.objects if o.type == 'MESH' and hull_re.match(o.name)}
+s += pack_variant(len(hulls))
+for hull,result in hulls.items():
+    # hull id (usefull to find out what has been hit)
+    s += pack_byte(int(result.groups()[0]))
+    # export all planes
+    bm = bmesh.new()
+    bm.from_mesh(hull.data)
+    s += pack_variant(len(bm.faces))
+    for face in bm.faces:
+        # normal
+        s += pack_vector(face.normal)
+        # distance from (0,0,0)
+        s += pack_double(face.normal.dot(face.verts[0].co))
 
 # layers = lod
 ln = 0

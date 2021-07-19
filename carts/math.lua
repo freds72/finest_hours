@@ -17,9 +17,10 @@ function v_dot(a,b)
 	return a[1]*b[1]+a[2]*b[2]+a[3]*b[3]
 end
 function v_scale(v,scale)
-	v[1]*=scale
-	v[2]*=scale
-	v[3]*=scale
+	return {
+		v[1]*scale,
+		v[2]*scale,
+		v[3]*scale}
 end
 function v_add(v,dv,scale)
 	scale=scale or 1

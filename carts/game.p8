@@ -7,12 +7,12 @@ __lua__
 
 -- globals
 local _models,_sun_dir,_cam,_plyr={},{0,-0.707,0.707}
-local _bullets={}
+local _particles={}
 local _tick=0
 
 local k_far,k_near=0,2
 local k_right,k_left=4,8
-local z_near=8
+local z_near=1
 
 #include math.lua
 
@@ -87,24 +87,34 @@ end
 -- tracking camera
 function make_cam(name)
 	local up,target_pos={0,1,0},{0,0,0}
+	-- cam track position
+	local mode,modes=1,{
+		{0.1,-8,0.2},
+		{1,-1,1}
+	}
+	local up_lag,back_dist,back_lag=unpack(modes[1])	
     return {
 	    pos=pos,
+		mode=function(self,m)
+			up_lag,back_dist,back_lag=unpack(modes[m])
+		end,
 		track=function(self,pos,m)
-			local target_u=m_up(m)
+			local target_u,pos=m_up(m),v_clone(pos)
 			-- orientation tracking
-			up=v_normz(v_lerp(up,target_u,0.2))
-
+			up=v_normz(v_lerp(up,target_u,up_lag))
+			
 			-- pos tracking (without view offset)
-			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),-12),0.05)
+			target_pos=v_lerp(target_pos,v_add(pos,m_fwd(m),back_dist),back_lag)
 
 			-- behind player
 			m=make_m_look_at(up,make_v(target_pos,pos))
 
-			-- shift cam position
-			pos=v_add(target_pos,up,5)
+			-- shift cam position			
+			pos=v_add(target_pos,up,3)
 
             -- clone matrix
             local m={unpack(m)}
+
             -- inverse view matrix
             m[2],m[5]=m[5],m[2]
             m[3],m[9]=m[9],m[3]
@@ -117,27 +127,7 @@ function make_cam(name)
             -pos[1],-pos[2],-pos[3],1
             })
             self.pos=pos
-        end,
-		track=function(self,pos,m)
-			-- 
-			pos[2]+=15
-			m=make_m_from_euler(0.25,0,0)
-
-            -- clone matrix
-            local m={unpack(m)}
-            -- inverse view matrix
-            m[2],m[5]=m[5],m[2]
-            m[3],m[9]=m[9],m[3]
-            m[7],m[10]=m[10],m[7]
-            --
-            self.m=m_x_m(m,{
-            1,0,0,0,
-            0,1,0,0,
-            0,0,1,0,
-            -pos[1],-pos[2],-pos[3],1
-            })
-            self.pos=pos
-        end,		
+        end,			
 		project=function(self,v)
 			-- world to view
 			v=m_x_v(self.m,v)
@@ -385,13 +375,20 @@ end
 -->8
 -- player controller (reads input from controller)
 function make_player_controller()
-	local gun=0
+	local gun,gunmode_ttl=0,0
 	return {
 		init=function()
 			-- power: 80
 			return 80
 		end,
 		update=function(self)
+			if gunmode_ttl>0 then
+				-- 
+				gunmode_ttl-=1
+				_cam:mode(2)
+			else
+				_cam:mode(1)
+			end
 			local dpow,droll,dpitch=0,0,0
 			if(btn(4)) dpow=1
 			if(btn(5)) dpow=-1
@@ -401,13 +398,15 @@ function make_player_controller()
 			if(btn(3)) dpitch=-1
 
 			-- fire control
-			if btnp(4) then
+			if btnp(5) then
+				gunmode_ttl=30
 				-- world position
 				gun+=1
 				local anchor=self.body.model.anchors[gun%2]
 				make_bullet(
 					m_x_v(self.body.m,anchor.pos),
-					m_x_n(self.body.m,anchor.n)
+					m_x_n(self.body.m,anchor.n),
+					self.body
 				)
 			end
 			return dpow,droll,dpitch
@@ -422,6 +421,8 @@ function make_level_controller()
 			return 80
 		end,
 		update=function(self)
+			local fwd=m_fwd(self.body.m)
+			if(fwd[2]<0.1) return 0,0,-1
 			return 0,0,0
 		end
 	}
@@ -488,7 +489,7 @@ function make_plane(model,pos,ctrl)
 			yaw=-drag
 
 			-- integrate
-			velocity=v_add(velocity,forces)
+			velocity=v_add(velocity,forces,0.5)
 
 			-- move
 			self.pos=v_add(self.pos,velocity)
@@ -499,6 +500,7 @@ function make_plane(model,pos,ctrl)
 				velocity[2]=0
 			end
 
+			-- todo: normalize after a while...
 			self.m=m_x_m(self.m,make_m_from_euler(pitch,yaw,roll))
 			m_set_pos(self.m,self.pos)
 			forces={0,0,0}
@@ -509,20 +511,29 @@ function make_plane(model,pos,ctrl)
 end
 
 -->8
--- weapons
-function make_bullet(pos,n)
-	add(_bullets,{
-		pos=v_clone(pos),
-		n=n,
-		vel=5+rnd(),
-		ttl=30+rnd(15)
+-- weapons & particles
+function make_bullet(pos,f,owner)
+	return add(_particles,{
+		owner=owner,
+		pos=pos,
+		f=v_scale(f,15+rnd()),
+		ttl=25+rnd(15),
+		type=1})
+end
+function make_particle(pos,f)
+	return add(_particles,{
+		pos=pos,
+		f=f,
+		ttl=15+rnd(5),
+		type=2
 	})
 end
 
 function hitscan(m,hulls,a,b)
-	local dir,closest_hit,closest_t=make_v(a,b)
 	-- convert bullet into object space
 	local aa,bb=m_inv_x_v(m,a),m_inv_x_v(m,b)
+	-- use local space for distance check
+	local dir,closest_hit,closest_t=make_v(aa,bb)
 	for id,planes in pairs(hulls) do
 		-- reset starting points for the next convex space
 		local p0,p1,hit=aa,bb
@@ -545,7 +556,7 @@ function hitscan(m,hulls,a,b)
 				if side then
 					-- segment entering
 					p0=v_lerp(p0,p1,frac)
-					hit=m_x_v(m,p0)
+					hit=p0
 					hit.n=plane
 				else
 					-- segment leaving
@@ -563,39 +574,59 @@ function hitscan(m,hulls,a,b)
 			end
 		end
 	end
-	-- convert hit normal into world space
-	return closest_hit,closest_hit and m_x_n(m,closest_hit.n)
+	-- convert hit into world space
+	return closest_hit and m_x_v(m,closest_hit),closest_hit and m_x_n(m,closest_hit.n)
 end
 
-function update_bullets()
-	for b in all(_bullets) do
-		b.ttl-=1
-		if b.ttl<0 then
-			del(_bullets,b)
+function update_particles()
+	for p in all(_particles) do
+		p.ttl-=1
+		if p.ttl<0 then
+			del(_particles,p)
 		else
-			b.prev_pos=b.pos
-			b.pos=v_add(b.pos,b.n,b.vel)
-			-- hit ground?
-			local hit=b.pos[2]<0
-			-- hit something?
-			if not hit then
-				for _,thing in pairs(_things) do
-					-- todo: skip bullet owner
-					if thing.model.hulls then
+			-- todo: yikes, move that to function or whatsnot
+			if p.type==1 then
+				p.prev_pos=p.pos
+				p.pos=v_add(p.pos,p.f)
+				-- hit ground?
+				local hit,hitn
+				if p.pos[2]<0 then
+					--hit,hitn=v_lerp(p.pos,p.prev_pos,p.pos[2]/(p.pos[2]-p.prev_pos[2])),{0,1,0}
+					hit,hitn={p.pos[1],0,p.pos[3]},{0,5+rnd(3),0}
+				end
+				-- hit something?
+				if not hit then
+					for _,thing in pairs(_things) do
+						-- todo: skip bullet owner
+						if thing!=p.owner and thing.model.hulls then
+							if v_len(make_v(p.pos,thing.pos))<16 then
+								hit,hitn=hitscan(thing.m,thing.model.hulls,p.pos,p.prev_pos)
+								if(hit) printh("hit") break
+							end
+						end
 					end
 				end
+				if(hit) make_particle(hit,hitn) del(_particles,p)
+			elseif p.type==2 then
+				-- gravity
+				-- todo: add some mass?
+				p.f=v_add(p.f,{0,-1,0})
+				if(p.pos[2]<0) del(_particles,p)
 			end
-			if(hit) del(_bullets,b)
 		end
 	end
 end
 
 function draw_bullets()
-	for _,b in pairs(_bullets) do
-		local v0=_cam:project(b.prev_pos)
-		local v1=_cam:project(b.pos)
-		if v0 and v1 then
-			line(v0.x,v0.y,v1.x,v1.y,9)
+	for _,p in pairs(_particles) do
+		local v0=_cam:project(p.pos)
+		if v0 then
+			if p.type==1 then
+				local v1=_cam:project(p.prev_pos)
+				if(v1) line(v0.x,v0.y,v1.x,v1.y,9)
+			elseif p.type==2 then
+				pset(v0.x,v0.y,10)
+			end
 		end
 	end
 end
@@ -624,15 +655,14 @@ function _init()
 
     _cam=make_cam("main")
 	
-	_plyr=make_plane("bf109",{0,60,0},make_player_controller())
 	_things={}
-	add(_things, _plyr)
-	--add(_things,make_plane("bf109",{-45,60,25},make_level_controller()))
-	--add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
+	_plyr=add(_things, make_plane("bf109",{0,60,0},make_player_controller()))
+	add(_things,make_plane("bf109",{-25,60,25},make_level_controller()))
+	add(_things,make_plane("bf109",{90,80,10},make_level_controller()))
 
 	_props={}
 	for i=1,0 do
-		local pos,m={512*cos(i/6),0,512*sin(i/6)},make_m_from_euler(0,rnd(),0)
+		local pos,m={128*cos(i/6),0,128*sin(i/6)},make_m_from_euler(0,rnd(),0)
 		m_set_pos(m,pos)
 		add(_props,{
 			model=_models["mountain"],
@@ -644,17 +674,12 @@ function _update()
 	for _,thing in pairs(_things) do
 		thing:update()
 	end
-	update_bullets()
+	update_particles()
 
-	local m=make_m_from_euler(0,0,0)
-	m_set_pos(m,{0,60,0})
-	_plyr.m=m
-
-    _cam:track({0,60,0},make_m_from_euler(0,0.15,0))
+    _cam:track(_plyr.pos,_plyr.m)
 	_tick+=1
 end
 
-local dx,dz=0,0
 function _draw()
     draw_ground()
 
@@ -677,37 +702,9 @@ function _draw()
 
 	fillp()
 
-	-- hitscan test
-	local angle=-time()/16
-	if(btn(0)) dx-=1/8
-	if(btn(1)) dx+=1/8
-	if(btn(2)) dz+=1/8
-	if(btn(3)) dz-=1/8
-	local b0={8*cos(angle)+dx,60,-8*sin(angle)+dz}
-	local b1={8*cos(angle+0.5)+dx,60,-8*sin(angle+0.5)+dz}
-	local v0=_cam:project(b0)
-	local v1=_cam:project(b1)
-	if v0 and v1 then
-		line(v0.x,v0.y,v1.x,v1.y,6)
-		print("a",v0.x,v0.y-2,7)
-		print("b",v1.x,v1.y-2,7)
-	end
-	local hit,hit_n=hitscan(_plyr.m,_plyr.model.hulls,b0,b1,out)
-	if hit then
-		v0=_cam:project(hit)
-		if v0 then
-			circfill(v0.x,v0.y,1,8)
-		end
-		-- draw normal
-		local tip=v_add(hit,hit_n,3)
-		v1=_cam:project(tip)
-		if v0 and v1 then
-			line(v0.x,v0.y,v1.x,v1.y,2)
-		end
-	end
-
 	-- memory
 	-- print(stat(0).."b",2,2,8)
+	print(#_particles,2,2,7)
 end
 
 -->8

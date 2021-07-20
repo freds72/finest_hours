@@ -301,7 +301,8 @@ function draw_faces(faces)
 		-- todo: get shininess factor from model
 		local col=main_face.ramp[light]
 
-		polyfill(d,col)
+		if(main_face.alpha) fillp(0xa5a5.8)
+		polyfill(d,col)		
 		-- decals? (hiden when unlit)
 		if light>0 and main_face.inner then
 			-- reuse array
@@ -311,6 +312,7 @@ function draw_faces(faces)
 				draw_face(v_cache[face[1]],v_cache[face[2]],v_cache[face[3]],v4 and v_cache[v4],face.ramp[light])
 			end
 		end
+		fillp(0xa5a5)
 
 		if(main_face.edges) polylines(d,0)
 	end
@@ -774,13 +776,15 @@ function unpack_models(ramps)
                 add(verts,unpack_vector(scale))
             end)
 			local function unpack_face()
-                local flags,f=mpeek(),{ramp=ramps[mpeek()]}
+                local flags,f=mpeek(),{ramp=ramps[mpeek()]}					
 				-- animation frame?
 				if(flags&0x10!=0) f.frame=mpeek()
 				-- backface?
 				if(flags&0x1!=0) f.dual_sided=true
 				-- edge rendering?
 				if(flags&0x4!=0) f.edges=true
+				-- transparency?
+				if(flags&0x20!=0) f.alpha=true
 
                 -- quad?
                 f.ni=(flags&0x2!=0) and 4 or 3

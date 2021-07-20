@@ -142,6 +142,7 @@ def pack_vector(co):
     return "{}{}{}".format(pack_double(co.x), pack_double(co.z), pack_double(co.y))
 
 # face flags bit layout:
+FACE_FLAG_TRANSPARENT = 0x20
 FACE_FLAG_ANIMFRAME = 0x10
 FACE_FLAG_DECALS = 0x8
 FACE_FLAG_EDGES = 0x4
@@ -153,9 +154,14 @@ def pack_face(f, obcontext, loop_vert, gname=None, decals = None):
     # face flags
     decals_bit = decals and FACE_FLAG_DECALS or 0
     dualsided_bit = 0
+    transparency_bit = 0
+
+    # default color
+    color = 1   
+
     # "animation" frame?
     animframe_bit = 0
-    frame_id = -1
+    frame_id = -1    
     if gname:
         frame_re = re.compile(r"frame:([0-9]+)")
         result = frame_re.match(gname)
@@ -163,9 +169,6 @@ def pack_face(f, obcontext, loop_vert, gname=None, decals = None):
             animframe_bit = FACE_FLAG_ANIMFRAME
             frame_id = int(result.groups()[0])
     
-    # default color
-    color = 1   
-
     vlen = len(f.loop_indices)
     if vlen<3 or vlen>4:
         raise Exception("Only tri or quad supported (#verts: {})".format(vlen))
@@ -178,9 +181,10 @@ def pack_face(f, obcontext, loop_vert, gname=None, decals = None):
         dualsided_bit = mat.use_backface_culling==False and FACE_FLAG_DUALSIDED or 0
         color = diffuse_to_p8color(mat.diffuse_color)
         edges_bit = mat.get('edges')=="true" and FACE_FLAG_EDGES or 0
+        transparency_bit = mat.diffuse_color[3]<1.0 and FACE_FLAG_TRANSPARENT or 0
     
     # flags
-    s += pack_byte(animframe_bit | decals_bit | edges_bit | quad_bit | dualsided_bit)
+    s += pack_byte(transparency_bit | animframe_bit | decals_bit | edges_bit | quad_bit | dualsided_bit)
 
     # color + frame number (if any)
     s += pack_byte(color)
@@ -238,7 +242,7 @@ def export_layer(layer):
     # find decal faces
     decal_faces_by_parent = defaultdict(set)  
     decal_faces = set()
-    decal_re = re.compile(r"(.+):decal")
+    decal_re = re.compile(r"decal:(.+)")
     for f, gname in gname_by_face.items():
         result = decal_re.match(gname)
         # find group name

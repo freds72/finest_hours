@@ -8,7 +8,7 @@ from lzs import Codec
 from dotdict import dotdict
 
 local_dir = os.path.dirname(os.path.realpath(__file__))
-blender_dir = os.path.expandvars("%programfiles%/Blender Foundation/Blender 2.92")
+blender_exe = os.path.expandvars(os.path.join("%programfiles%","Blender Foundation","Blender 2.92","blender.exe"))
 
 def call(args):
     proc = Popen(args, stdout=PIPE, stderr=PIPE, cwd=local_dir)
@@ -53,7 +53,7 @@ def pack_models(home_path):
         fd, path = tempfile.mkstemp()
         try:
             os.close(fd)
-            exitcode, out, err = call([os.path.join(blender_dir,"blender.exe"),os.path.join(home_path,"models",blend_file + ".blend"),"--background","--python","blender_export.py","--","--out",path])
+            exitcode, out, err = call([blender_exe,os.path.join(home_path,"models",blend_file + ".blend"),"--background","--python","blender_export.py","--","--out",path])
             if err:
                 raise Exception('Unable to loadt: {}. Exception: {}'.format(blend_file,err))
             logging.debug("Blender exit code: {} \n out:{}\n err: {}\n".format(exitcode,out,err))
@@ -98,6 +98,7 @@ end
         to_multicart(game_data, pico_path, os.path.join(home_path,"carts"), "dat", boot_code=bootloader_code)
 
 def main():
+  global blender_exe
   parser = argparse.ArgumentParser()
   parser.add_argument("--pico-home", required=True, type=str, help="Full path to PICO8 folder")
   parser.add_argument("--home", required=True, type=str, help="Root of game files (carts, models...)")
@@ -105,10 +106,18 @@ def main():
   parser.add_argument("--compress-more", action='store_true', required=False, help="Brute force search of best compression parameters. Warning: takes time (default: false)")
   parser.add_argument("--release", required=False,  type=str, help="Generate html+bin packages with given version. Note: compression mandatory if number of carts above 16.")
   parser.add_argument("--test", action='store_true', required=False, help="Test mode - does not write cart data")
+  parser.add_argument("--blender-location", required=False, type=str, help="Full path to Blender 2.9+ executable (default: {})".format(blender_exe))
 
   args = parser.parse_args()
 
   logging.basicConfig(level=logging.INFO)
+  if args.blender_location:
+    blender_exe = args.blender_location
+  logging.debug("Blender location: {}".format(blender_exe))
+  # test Blender path
+  if not os.path.isfile(os.path.join(blender_exe)):
+    raise Exception("Unable to locate Blender app at: {}".format(blender_exe))
+
   pack_archive(args.pico_home, args.home, compress=args.compress or args.compress_more, release=args.release, compress_more=args.compress_more, test=args.test)
   logging.info('DONE')
     
